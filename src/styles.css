@@ -204,6 +204,7 @@ input[type='checkbox'], input[type='radio'] { width: 18px; height: 18px; min-hei
 .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 .grid-scatter { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(260px, 1fr); gap: 16px; margin-bottom: 16px; }
 .grid-2 > .panel, .grid-3 > .panel, .grid-scatter > .panel { margin-bottom: 0; }
+.grid-2 > *, .grid-3 > *, .grid-scatter > * { min-width: 0; }
 .boot { display: flex; gap: 10px; align-items: center; justify-content: center; padding: 120px 20px; color: var(--ink-3); }
 .spinner { width: 20px; height: 20px; border-radius: 50%; border: 3px solid var(--primary-c); border-top-color: var(--primary); animation: spin .9s linear infinite; flex: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -286,7 +287,7 @@ tbody tr:hover { background: var(--s-low); }
 .f-icon::after { content: ''; position: absolute; inset: 13px; border-radius: 50%; background: var(--primary); }
 .f-icon.cannibal { background: var(--bad-c); } .f-icon.cannibal::after { background: var(--k-cannibal); box-shadow: 8px 0 0 var(--k-cannibal); inset: 15px 19px 15px 11px; opacity: .85; }
 .f-icon.decay { background: var(--warn-c); } .f-icon.decay::after { background: none; border-radius: 0; border-bottom: 3px solid var(--k-decay); border-left: 3px solid var(--k-decay); transform: skewY(20deg); }
-.f-icon.drop { background: color-mix(in srgb, var(--c-impr) 20%, transparent); } .f-icon.drop::after { background: var(--c-impr); border-radius: 3px; inset: 12px 14px 20px; box-shadow: 0 10px 0 -2px var(--c-pos); }
+.f-icon.drop { background: color-mix(in srgb, var(--c-impr) 20%, transparent); } .f-icon.drop::after { background: linear-gradient(90deg, var(--c-impr) 0 30%, transparent 30% 35%, var(--c-pos) 35% 65%, transparent 65% 70%, var(--c-ctr) 70%); border-radius: 3px; inset: 18px 11px; }
 .f-icon.striking { background: var(--good-c); } .f-icon.striking::after { background: var(--k-striking); }
 .f-icon.lock { background: var(--s-high); } .f-icon.lock::after { background: var(--ink-2); border-radius: 4px; inset: 18px 13px 11px; }
 .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
@@ -494,7 +495,7 @@ tbody tr:hover { background: var(--s-low); }
   .nav.open { display: flex; }
   .burger { display: inline-grid; }
   .hide-sm { display: none !important; }
-  .brand span { display: none; }
+  .brand > span:not(.monogram) { display: none; }
   .header-inner { gap: 8px; padding: 0 12px; }
   .grid-2, .grid-3, .quotes, .features, .steps, .onboard, .parts-total { grid-template-columns: 1fr; }
   .kpis, .metric-tabs { grid-template-columns: 1fr 1fr; }

@@ -565,7 +565,7 @@ export function checkTitle(title: string, query: string, meta = ''): TitleCheck[
   if (px > 580) out.push({ level: 'bad', message: `About ${Math.round(px)} px wide: Google cuts titles near 580 px (roughly ${t.length} characters here, aim for 50 to 60).` })
   else if (t.length < 30) out.push({ level: 'warn', message: `Only ${t.length} characters: room to add the query intent or a benefit.` })
   else out.push({ level: 'ok', message: `${t.length} characters, about ${Math.round(px)} px: fits.` })
-  const words = q.split(/\s+/).filter(x => x.length > 2)
+  const words = q.split(/\s+/).filter(x => x.length > 2 && !STOP.has(x))
   const lt = t.toLowerCase()
   const missing = words.filter(x => !lt.includes(x.replace(/s$/, '')))
   if (q && lt.includes(q)) {
@@ -583,13 +583,17 @@ export function checkTitle(title: string, query: string, meta = ''): TitleCheck[
   return out
 }
 
-const titleCase = (s: string) => s.replace(/\b([a-z])/g, (_, c: string) => c.toUpperCase())
+const STOP = new Set(['a', 'an', 'and', 'the', 'for', 'of', 'to', 'in', 'on', 'with', 'what', 'how', 'is', 'vs', 'without', 'does'])
+const titleCase = (s: string) => s.split(' ').map((w, i) => i && STOP.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
 
 /** Puts the query first, keeps the useful part of the old title and trims to fit 580 px at a word boundary. */
 export function suggestTitle(title: string, query: string, brand = ''): string {
   const q = titleCase(query.trim())
   const rest = title.replace(new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'ig'), '').replace(/^[\s|\-–:,]+|[\s|\-–:,]+$/g, '').replace(/\s*[|\-–]\s*[^|\-–]*$/, brand ? '' : '$&').trim()
-  let s = rest ? `${q}: ${rest}` : q
+  // Drop the old title when it only repeats words already in the query ("Cookies" for "chocolate chip cookies recipe").
+  const qWords = new Set(query.toLowerCase().split(/\s+/))
+  const adds = rest.toLowerCase().split(/\s+/).some(w => w && !qWords.has(w) && !qWords.has(w.replace(/s$/, '')))
+  let s = rest && adds ? `${q}: ${rest}` : q
   const tail = brand ? ` | ${brand}` : ''
   while (pixelWidth(s + tail) > 580 && s.includes(' ')) s = s.slice(0, s.lastIndexOf(' ')).replace(/[\s,:;–-]+$/, '')
   return s + tail

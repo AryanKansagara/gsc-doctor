@@ -10,7 +10,7 @@ const xs = (p: number, w: number) => 40 + (Math.log(Math.min(X_MAX, Math.max(1, 
 
 export function CtrScatter({ points, curve, picked, onPick, height = 360, width = 640, glowMin = 20 }: { points: QueryPoint[]; curve: Curve; picked?: string | null; onPick?(q: QueryPoint): void; height?: number; width?: number; glowMin?: number }) {
   const W = width, H = height, top = 14, bottom = 34
-  const yMax = useMemo(() => Math.min(0.6, Math.max(0.08, expectedCtr(curve, 1) * 1.25, ...points.filter(p => p.position <= X_MAX).map(p => p.ctr))) , [points, curve])
+  const yMax = useMemo(() => Math.min(0.6, Math.max(0.08, expectedCtr(curve, 1) * 1.25, ...points.filter(p => p.position <= X_MAX && !p.branded && p.impressions >= 30).map(p => p.ctr))) , [points, curve])
   const ys = (c: number) => top + (1 - Math.min(c, yMax) / yMax) * (H - top - bottom)
   const maxImp = Math.max(1, ...points.map(p => p.impressions))
   const path = useMemo(() => {
@@ -55,7 +55,7 @@ export function CtrScatter({ points, curve, picked, onPick, height = 360, width 
 export function Timeline({ daily, updates, bands = [], height = 200, metric = 'clicks' }: { daily: { date: string; clicks: number; impressions: number }[]; updates: Update[]; bands?: { from: string; to: string; label: string }[]; height?: number; metric?: 'clicks' | 'impressions' }) {
   const [hover, setHover] = useState<number | null>(null)
   if (daily.length < 2) return <p className="muted small">Not enough dated rows for a timeline. Import the Dates table or dated rows.</p>
-  const W = 900, H = height, top = 22, bottom = 22
+  const W = 900, H = height, top = 34, bottom = 22
   const t0 = Date.parse(daily[0].date), t1 = Date.parse(daily[daily.length - 1].date)
   const x = (d: string) => 6 + ((Date.parse(d) - t0) / Math.max(1, t1 - t0)) * (W - 12)
   // 7-day average keeps weekday swings from hiding the trend.
@@ -63,7 +63,11 @@ export function Timeline({ daily, updates, bands = [], height = 200, metric = 'c
   const max = Math.max(...smooth) * 1.1 || 1
   const y = (v: number) => top + (1 - v / max) * (H - top - bottom)
   const line = smooth.map((v, i) => `${i ? 'L' : 'M'}${x(daily[i].date).toFixed(1)},${y(v).toFixed(1)}`).join('')
-  const vis = updates.filter(u => updateEnd(u) >= daily[0].date && u.start <= daily[daily.length - 1].date)
+  const vis = updates.filter(u => updateEnd(u) >= daily[0].date && u.start <= daily[daily.length - 1].date).sort((a, b) => a.start.localeCompare(b.start))
+  // Labels closer than ~80px drop to a second row so neighbouring updates stay readable.
+  const rows: number[] = []
+  let lastX = -1e9, lastRow = 1
+  for (const u of vis) { const lx = x(u.start < daily[0].date ? daily[0].date : u.start); const r = lx - lastX < 80 && lastRow === 0 ? 1 : 0; rows.push(r); lastX = lx; lastRow = r }
   const months = daily.filter(d => d.date.endsWith('-01'))
   const h = hover !== null ? daily[hover] : null
   return (
@@ -72,10 +76,10 @@ export function Timeline({ daily, updates, bands = [], height = 200, metric = 'c
         onMouseMove={e => { const r = (e.currentTarget as SVGSVGElement).getBoundingClientRect(); const fx = (e.clientX - r.left) / r.width * W; setHover(Math.max(0, Math.min(daily.length - 1, Math.round((fx - 6) / (W - 12) * (daily.length - 1))))) }}
         onMouseLeave={() => setHover(null)}>
         {bands.map(b => <rect key={b.label} x={x(b.from)} width={Math.max(2, x(b.to) - x(b.from))} y={top} height={H - top - bottom} className="band" />)}
-        {vis.map(u => (
+        {vis.map((u, ui) => (
           <g key={u.name} className={`upd ${u.kind}`}>
             <rect x={x(u.start < daily[0].date ? daily[0].date : u.start)} width={Math.max(2, x(updateEnd(u) > daily[daily.length - 1].date ? daily[daily.length - 1].date : updateEnd(u)) - x(u.start < daily[0].date ? daily[0].date : u.start))} y={top} height={H - top - bottom} />
-            <text x={x(u.start < daily[0].date ? daily[0].date : u.start) + 3} y={top - 7}>{u.name.replace(/ update$/, '').replace(/^(\w+) (\d{4}) /, (_, m: string, yr: string) => `${m.slice(0, 3)} ${yr.slice(2)} `)}</text>
+            <text x={x(u.start < daily[0].date ? daily[0].date : u.start) + 3} y={rows[ui] ? top - 5 : top - 19}>{u.name.replace(/ update$/, '').replace(/^(\w+) (\d{4}) /, (_, m: string, yr: string) => `${m.slice(0, 3)} \u2019${yr.slice(2)} `)}</text>
             <title>{`${u.name}: ${u.start} to ${updateEnd(u)}`}</title>
           </g>
         ))}
