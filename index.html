@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en" data-default-mode="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Search Console Doctor: turn a Search Console export into an SEO worklist</title>
+    <meta name="description" content="Drop in a Google Search Console export and get a prioritised SEO worklist: CTR gaps on your own position curve, keyword cannibalisation with a redirect plan, content decay, striking-distance queries and drop diagnosis against Google update dates." />
+    <meta name="theme-color" content="#0b57d0" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%230b57d0'/><text x='16' y='21' font-family='Arial,sans-serif' font-size='13' font-weight='700' text-anchor='middle' fill='white'>SD</text></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:wght@400;500;700&family=Google+Sans+Code:wght@400;500&display=swap" rel="stylesheet" />
+    <script>
+      (function () {
+        var q = new URLSearchParams(location.search).get('mode')
+        var m = q === 'light' || q === 'dark' ? q : localStorage.getItem('themeMode')
+        document.documentElement.dataset.themeMode = m === 'light' || m === 'dark' ? m : document.documentElement.dataset.defaultMode
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
