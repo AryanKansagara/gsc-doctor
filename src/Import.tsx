@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { addDays } from './engine/updates.ts'
-import { autoMap, detectKind, factsToCsv, FIELDS, filtersNote, KIND_LABEL, mergeFacts, readFile, validate, type Mapping, type Table, type TableKind } from './engine/parse.ts'
+import { autoMap, detectKind, factsToCsv, FIELDS, filterDays, filtersNote, sumDuplicates, KIND_LABEL, mergeFacts, readFile, validate, type Mapping, type Table, type TableKind } from './engine/parse.ts'
 import type { Fact, Settings } from './engine/types.ts'
 import { createBlankProject } from './projectData.ts'
 import { putData, saveProject, uuid, type Project } from './store.ts'
@@ -196,7 +196,7 @@ async function pullRows(token: string, site: string, start: string, end: string,
     onProgress(out.length)
     if (rows.length < 25_000) break
   }
-  return out
+  return sumDuplicates(out)
 }
 
 function LivePull({ onRows }: { onRows(f: Fact[]): Promise<void> }) {

@@ -6,7 +6,7 @@ export interface Table { name: string; rows: string[][]; lines: number[] }
 
 export function parseCsv(text: string, name = 'data.csv'): Table {
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
-  const delim = sniffDelimiter(text)
+  const delim = sniffDelimiter(text.replace(/^(?:[ \t]*(?:#[^\n]*)?\r?\n)+/, ''))
   const rows: string[][] = []
   const lines: number[] = []
   let row: string[] = []
@@ -40,6 +40,8 @@ export function parseCsv(text: string, name = 'data.csv'): Table {
     row.push(field)
     if (row.length > 1 || row[0] !== '') { rows.push(row); lines.push(rowLine) }
   }
+  // Google Analytics exports start with a block of "# ..." comment lines before the header.
+  while (rows.length && rows[0][0].trimStart().startsWith('#')) { rows.shift(); lines.shift() }
   return { name, rows, lines }
 }
 
@@ -122,6 +124,36 @@ export function readXlsx(files: { name: string; bytes: Uint8Array }[]): Table[] 
   })
 }
 
+const DEVICE_KEYS = /^(desktop|mobile|tablet)$/i
+
+/**
+ * Search Analytics API responses ({ rows: [{ keys, clicks, impressions, ctr, position }] }) and plain arrays of
+ * objects (BigQuery "save as JSON"). The API does not name the keys, so each key column is recognised by its values.
+ */
+export function jsonTable(data: unknown, name = 'data.json'): Table {
+  const list = (Array.isArray(data) ? data : (data as { rows?: unknown })?.rows) as Record<string, unknown>[] | undefined
+  if (!Array.isArray(list) || !list.length || typeof list[0] !== 'object' || list[0] === null) throw new Error('No rows found in this JSON. Expected a Search Analytics API response or an array of rows.')
+  const str = (v: unknown) => v === null || v === undefined ? '' : String(v)
+  let header: string[], body: string[][]
+  if (Array.isArray(list[0].keys)) {
+    const n = (list[0].keys as unknown[]).length
+    const probe = list.slice(0, 200)
+    const names: string[] = []
+    for (let i = 0; i < n; i++) {
+      const vals = probe.map(r => str((r.keys as unknown[])[i]))
+      const guess = vals.every(v => /^\d{4}-\d{2}-\d{2}$/.test(v)) ? 'date' : vals.every(v => /^(https?:\/\/|sc-domain:)/i.test(v)) ? 'page'
+        : vals.every(v => DEVICE_KEYS.test(v)) ? 'device' : vals.every(v => /^[a-z]{3}$/.test(v)) ? 'country' : 'query'
+      names.push(names.includes(guess) ? `${guess} ${i + 1}` : guess)
+    }
+    header = [...names, 'clicks', 'impressions', 'ctr', 'position']
+    body = list.map(r => [...(r.keys as unknown[]).map(str), str(r.clicks), str(r.impressions), str(r.ctr), str(r.position)])
+  } else {
+    header = [...new Set(list.flatMap(r => Object.keys(r)))]
+    body = list.map(r => header.map(k => { const v = r[k]; return v !== null && typeof v === 'object' ? str((v as { value?: unknown }).value) : str(v) }))
+  }
+  return { name, rows: [header, ...body], lines: [1, ...body.map((_, i) => i + 2)] }
+}
+
 /** Turns any dropped file into tables: CSV/TSV, a zip of CSVs (the Search Console export), or an .xlsx workbook. */
 export async function readFile(name: string, buf: ArrayBuffer): Promise<Table[]> {
   const head = new Uint8Array(buf, 0, Math.min(4, buf.byteLength))
@@ -130,14 +162,24 @@ export async function readFile(name: string, buf: ArrayBuffer): Promise<Table[]>
     if (files.some(f => f.name === 'xl/workbook.xml')) return readXlsx(files)
     return files.filter(f => /\.(csv|tsv|txt)$/i.test(f.name)).map(f => parseCsv(new TextDecoder().decode(f.bytes), f.name.split('/').pop()!))
   }
-  return [parseCsv(new TextDecoder().decode(buf), name)]
+  const text = new TextDecoder().decode(buf)
+  if (/^\uFEFF?\s*[[{]/.test(text)) {
+    let data: unknown
+    try { data = JSON.parse(text.replace(/^\uFEFF/, '')) } catch { throw new Error('This looks like JSON but could not be parsed.') }
+    return [jsonTable(data, name)]
+  }
+  return [parseCsv(text, name)]
 }
 
 // ---------- Values ----------
 
 export function parseNum(raw: string | undefined): number {
-  const s = (raw ?? '').trim().replace(/[,\s]/g, '')
+  let s = (raw ?? '').trim().replace(/[\s\u00a0\u202f]/g, '')
   if (s === '' || /^(null|nan|-|—)$/i.test(s)) return NaN
+  // "1,234" and "1,234.5" are thousands; "1.234,5" and "11,75" are decimal commas (German, French, Spanish exports).
+  if (/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) s = s.replace(/,/g, '')
+  else if (/^-?\d{1,3}(\.\d{3})+,\d+$/.test(s)) s = s.replace(/\./g, '').replace(',', '.')
+  else if (/^-?\d+,\d+$/.test(s)) s = s.replace(',', '.')
   return Number(s)
 }
 
@@ -173,41 +215,55 @@ export function normPage(raw: string): string {
   const m = s.match(/^(https?:\/\/)([^/?]+)(.*)$/i)
   return m ? m[1].toLowerCase() + m[2].toLowerCase() + (m[3] || '/') : s
 }
-const DEVICES: Record<string, string> = { desktop: 'Desktop', mobile: 'Mobile', tablet: 'Tablet' }
-const normDevice = (s: string) => DEVICES[s.trim().toLowerCase()] ?? s.trim()
+/** Lowercase, single spaces, accents removed: "Häufigste  Suchanfragen" -> "haufigste suchanfragen". */
+export const fold = (s: string) => s.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ')
+// Device labels as Search Console writes them in English, German, French, Spanish, Italian, Portuguese and Dutch exports.
+const DEVICES: Record<string, string> = {
+  desktop: 'Desktop', computer: 'Desktop', ordinateur: 'Desktop', ordenador: 'Desktop', computador: 'Desktop',
+  mobile: 'Mobile', mobil: 'Mobile', movil: 'Mobile', moviles: 'Mobile', 'dispositivo mobile': 'Mobile', 'dispositivos moveis': 'Mobile', mobiel: 'Mobile',
+  tablet: 'Tablet', tablette: 'Tablet', tableta: 'Tablet', tablets: 'Tablet',
+}
+const normDevice = (s: string) => DEVICES[fold(s)] ?? s.trim()
 const normCountry = (s: string) => /^[a-z]{3}$/.test(s.trim()) ? s.trim().toUpperCase() : s.trim()
 
 // ---------- Format detection and column mapping ----------
 
-export type Field = Dim | 'date' | 'clicks' | 'impressions' | 'ctr' | 'position' | 'clicks_prev' | 'impressions_prev' | 'ctr_prev' | 'position_prev'
+export type Field = Dim | 'date' | 'clicks' | 'impressions' | 'ctr' | 'position' | 'sum_position' | 'clicks_prev' | 'impressions_prev' | 'ctr_prev' | 'position_prev'
 export type Mapping = Partial<Record<Field, number>>
 export const FIELDS: { key: Field; label: string; required?: boolean }[] = [
   { key: 'date', label: 'Date' }, { key: 'query', label: 'Query' }, { key: 'page', label: 'Page' },
   { key: 'country', label: 'Country' }, { key: 'device', label: 'Device' },
   { key: 'clicks', label: 'Clicks', required: true }, { key: 'impressions', label: 'Impressions', required: true },
   { key: 'ctr', label: 'CTR' }, { key: 'position', label: 'Position', required: true },
+  { key: 'sum_position', label: 'Sum of positions (BigQuery)' },
   { key: 'clicks_prev', label: 'Clicks (previous)' }, { key: 'impressions_prev', label: 'Impressions (previous)' },
   { key: 'ctr_prev', label: 'CTR (previous)' }, { key: 'position_prev', label: 'Position (previous)' },
 ]
 
+// Header names are matched after fold(): lowercase, no accents. Besides English these cover the localised
+// Search Console exports (German, French, Spanish, Italian, Portuguese, Dutch) and the Analytics Search Console report.
 const SYN: Record<Dim | 'date', RegExp> = {
-  query: /^(top )?quer(y|ies)$|^search (query|term)$|^keyword$|^keys?\[?0\]?$/,
-  page: /^(top )?pages?$|^landing page$|^url$|^address$|^page url$/,
-  country: /^countr(y|ies)$/,
-  device: /^device( category)?$|^devices$/,
-  date: /^date$|^data_date$|^day$/,
+  query: /^(top )?quer(y|ies)$|^search (query|term)$|^keyword$|^keys?\[?0\]?$|^organic google search query$|suchanfrage|^requetes?( les plus frequentes)?$|^consultas?( principales)?$|^principais consultas$|^query piu frequenti$|zoekopdracht/,
+  page: /^(top )?pages?$|^landing page$|^url$|^address$|^page url$|^(die )?haufigsten seiten$|^seiten?$|^pages les plus populaires$|^paginas principales$|^principais paginas$|^pagine principali$|^pagina$|^populairste pagina'?s$/,
+  country: /^countr(y|ies)$|^land$|^pays$|^pais$|^paese$/,
+  device: /^device( category)?$|^devices$|^gerat$|^appareil$|^dispositivo$|^apparaat$/,
+  date: /^date$|^data_date$|^day$|^datum$|^fecha$|^data$/,
 }
+const word = (w: string) => new RegExp(`(^|\\s)(${w})$|^(${w}) `)
 const METRIC: Record<'clicks' | 'impressions' | 'ctr' | 'position', RegExp> = {
-  clicks: /(^|\s)(url |site |total )?clicks$/,
-  impressions: /(^|\s)impressions$/,
-  ctr: /(^|\s)(url |site )?ctr$/,
-  position: /(^|\s)(average |avg\.? )?position$/,
+  clicks: word('clicks|klicks|clics|clic|cliques|klikken'),
+  impressions: word('impressions|impressionen|impresiones|impressioni|impressoes|vertoningen'),
+  ctr: /(^|\s)ctr$|click-through rate$|^klickrate|^taux de clics|^porcentaje de clics/,
+  position: /(^|\s)(position|posicion|posizione|posicao|positie)$|^durchschnittliche position/,
 }
-const PREV = /previous|prior|year ago|before/
+const PREV = /previous|prior|year ago|before|vorherige|vorheriger|precedent|anterior|vorige/
 
 export function autoMap(headers: string[]): Mapping {
-  const h = headers.map(x => x.trim().toLowerCase().replace(/\s+/g, ' '))
+  const h = headers.map(fold)
   const map: Mapping = {}
+  // The raw BigQuery bulk export stores a zero-based sum of positions instead of an average.
+  const sum = h.findIndex(x => /^sum_(top_)?position$/.test(x))
+  if (sum >= 0) map.sum_position = sum
   for (const d of [...DIMS, 'date'] as const) { const i = h.findIndex(x => SYN[d].test(x)); if (i >= 0) map[d] = i }
   for (const k of Object.keys(METRIC) as (keyof typeof METRIC)[]) {
     const idx = h.map((x, i) => METRIC[k].test(x) ? i : -1).filter(i => i >= 0)
@@ -229,8 +285,7 @@ export const KIND_LABEL: Record<TableKind, string> = {
 }
 
 export function detectKind(t: Table, map: Mapping = autoMap(t.rows[0] ?? [])): TableKind {
-  const h0 = (t.rows[0]?.[0] ?? '').trim().toLowerCase()
-  if (/^filter$/.test(h0) || /search appearance/.test(h0) || /^(filters|search appearance)/i.test(t.name)) return 'ignored'
+  if (isFilters(t) || APPEARANCE.test(fold(t.rows[0]?.[0] ?? '')) || APPEARANCE.test(fold(t.name))) return 'ignored'
   if (map.clicks === undefined || map.impressions === undefined) return 'unknown'
   const dims = DIMS.filter(d => map[d] !== undefined)
   if (dims.length > 1 || (dims.length === 1 && map.date !== undefined)) return 'rows'
@@ -238,10 +293,29 @@ export function detectKind(t: Table, map: Mapping = autoMap(t.rows[0] ?? [])): T
   return ({ query: 'queries', page: 'pages', country: 'countries', device: 'devices' } as const)[dims[0]]
 }
 
+const APPEARANCE = /^(search appearance|darstellung in der suche|apparence dans les resultats|aspecto de (la )?busqueda|aspetto nella ricerca|aparencia (na|da) pesquisa|uiterlijk in zoek)/
+/** The two-column Filters table: "Filter,Value", "Filtern,Wert", "Filtre,Valeur", "Filtrar,Valor", "Filtra,Valore". */
+const isFilters = (t: Table) => (t.rows[0]?.length ?? 0) <= 2 && /^filt/.test(fold(t.rows[0]?.[0] ?? ''))
+
 /** Reads the date range from the export's Filters sheet ("Date | Last 3 months" or "Compare | ..."), if present. */
 export function filtersNote(tables: Table[]): string {
-  const f = tables.find(t => /filters/i.test(t.name) || /^filter$/i.test(t.rows[0]?.[0] ?? ''))
+  const f = tables.find(isFilters)
   return f ? f.rows.slice(1).map(r => r.filter(Boolean).join(': ')).join(' · ') : ''
+}
+
+/**
+ * Length in days of the exported period, from the Filters table: "Last 28 days", "Letzte 3 Monate",
+ * "Últimos 3 meses", "3 derniers mois" or an explicit "1 Jan 2024-18 Dec 2024". Null when it cannot be read.
+ */
+export function filterDays(tables: Table[]): number | null {
+  for (const r of tables.find(isFilters)?.rows.slice(1) ?? []) {
+    const v = fold(r[1] ?? '')
+    const m = v.match(/(\d+) (?:\w+ )?(day|tag|dia|giorn|jour|dag|month|monat|mes|mois|maand)/)
+    if (m) return Math.round(+m[1] * (/^(day|tag|dia|giorn|jour|dag)/.test(m[2]) ? 1 : 30.44))
+    const d = v.match(/^(\d{1,2} [a-z]{3,9} \d{4}) ?- ?(\d{1,2} [a-z]{3,9} \d{4})$/)
+    if (d) { const a = Date.parse(d[1] + ' UTC'), b = Date.parse(d[2] + ' UTC'); if (Number.isFinite(a) && Number.isFinite(b) && b >= a) return Math.round((b - a) / 86400000) + 1 }
+  }
+  return null
 }
 
 // ---------- Validation ----------
@@ -256,21 +330,29 @@ export function validate(t: Table, map: Mapping): Validation {
   const g = dims.join('|')
   const dated = map.date !== undefined
   const compare = map.clicks_prev !== undefined && map.impressions_prev !== undefined
-  for (const f of ['clicks', 'impressions', 'position'] as const) if (map[f] === undefined) issues.push({ line: t.lines[0] ?? 1, level: 'error', message: `No column is mapped to ${f}.` })
+  const head = t.lines[0] ?? 1
+  for (const f of ['clicks', 'impressions', 'position'] as const) if (map[f] === undefined && !(f === 'position' && map.sum_position !== undefined)) issues.push({ line: head, level: 'error', message: `No column is mapped to ${f}.` })
   if (issues.length) return { facts, total: Math.max(0, t.rows.length - 1), skipped: Math.max(0, t.rows.length - 1), issues, dims, dated, compare, range: null }
-  const seen = new Set<string>()
-  let skipped = 0
+  // Raw BigQuery tables mix search types and carry anonymised rows with no query.
+  const h = (t.rows[0] ?? []).map(fold)
+  const typeCol = h.indexOf('search_type'), anonCol = h.indexOf('is_anonymized_query')
+  const seen = new Map<string, { cur: Fact | null; prev: Fact | null; frag: boolean }>()
+  const sum = (a: Fact, b: Fact) => { a.position = (a.position * a.impressions + b.position * b.impressions) / (a.impressions + b.impressions); a.clicks += b.clicks; a.impressions += b.impressions }
+  let skipped = 0, zero = 0, otherType = 0, anon = 0, merged = 0
   let lo = '', hi = ''
   for (let r = 1; r < t.rows.length; r++) {
     const row = t.rows[r], line = t.lines[r] ?? r + 1
     const err = (m: string) => { issues.push({ line, level: 'error', message: m }); skipped++ }
+    if (typeCol >= 0 && (row[typeCol] ?? '').trim() && !/^web$/i.test(row[typeCol].trim())) { otherType++; continue }
+    if (anonCol >= 0 && map.query !== undefined && !(row[map.query] ?? '').trim() && /^true$/i.test((row[anonCol] ?? '').trim())) { anon++; continue }
     const base: Partial<Fact> = { g }
-    let bad = false
+    let bad = false, frag = false
     for (const d of dims) {
       let v = (row[map[d]!] ?? '').trim()
       if (!v) { err(`Empty ${d}.`); bad = true; break }
       if (d === 'page') {
         if (!/^https?:\/\//i.test(v) && !v.startsWith('/') && !/^sc-domain:/.test(v)) issues.push({ line, level: 'warning', message: `"${v.slice(0, 60)}" does not look like a URL.` })
+        frag = v.includes('#')
         v = normPage(v)
       }
       if (d === 'device') v = normDevice(v)
@@ -288,14 +370,17 @@ export function validate(t: Table, map: Mapping): Validation {
     const read = (prev: boolean): Fact | string | null => {
       const clicks = parseNum(row[map[prev ? 'clicks_prev' : 'clicks']!])
       const imp = parseNum(row[map[prev ? 'impressions_prev' : 'impressions']!])
-      const p = parseNum(row[map[prev ? 'position_prev' : 'position'] ?? -1])
       const tag = prev ? ' (previous period)' : ''
       if (prev && !Number.isFinite(clicks) && !Number.isFinite(imp)) return null
       if (!Number.isFinite(clicks) || clicks < 0) return `Clicks${tag} "${row[map[prev ? 'clicks_prev' : 'clicks']!] ?? ''}" is not a number.`
       if (!Number.isFinite(imp) || imp < 0) return `Impressions${tag} "${row[map[prev ? 'impressions_prev' : 'impressions']!] ?? ''}" is not a number.`
       if (clicks > imp) return `Clicks${tag} (${clicks}) exceed impressions (${imp}).`
       if (imp === 0) return null
-      if (!Number.isFinite(p) || p < 1) return `Position${tag} "${row[map[prev ? 'position_prev' : 'position'] ?? -1] ?? ''}" must be 1 or more.`
+      const sumCol = prev ? undefined : map.sum_position
+      const posCol = map[prev ? 'position_prev' : 'position'] ?? -1
+      // BigQuery: sum_position is zero-based and summed over impressions, so average position = sum / impressions + 1.
+      const p = sumCol !== undefined && map.position === undefined ? parseNum(row[sumCol]) / imp + 1 : parseNum(row[posCol])
+      if (!Number.isFinite(p) || p < 1) return `Position${tag} "${row[sumCol !== undefined && map.position === undefined ? sumCol : posCol] ?? ''}" must be 1 or more.`
       const ctrCol = map[prev ? 'ctr_prev' : 'ctr']
       if (ctrCol !== undefined) {
         const c2 = parseCtr(row[ctrCol])
@@ -305,16 +390,48 @@ export function validate(t: Table, map: Mapping): Validation {
     }
     const cur = read(false)
     if (typeof cur === 'string') { err(cur); continue }
-    const prev = compare ? read(true) : null
-    if (typeof prev === 'string') { issues.push({ line, level: 'warning', message: prev + ' Previous period ignored for this row.' }) }
+    let prev = compare ? read(true) : null
+    if (typeof prev === 'string') { issues.push({ line, level: 'warning', message: prev + ' Previous period ignored for this row.' }); prev = null }
+    if (!cur && !prev) {
+      // A day with no impressions is still a day: keep it in the daily series so period lengths and trends stay right.
+      if (dated && !dims.length) facts.push({ g, date: base.date, clicks: 0, impressions: 0, position: 0 })
+      else zero++
+      continue
+    }
     const key = [base.date, ...dims.map(d => base[d])].join('\u0001')
-    if (seen.has(key)) issues.push({ line, level: 'warning', message: `Duplicate row for ${dims.map(d => base[d]).join(' / ') || base.date}. The later row wins.` })
-    seen.add(key)
+    const e = seen.get(key)
+    if (e && (frag || e.frag)) {
+      // Search Console lists #jump-link URLs as separate rows of the same page: add them up instead of keeping one.
+      merged++
+      e.frag = true
+      if (cur) { if (e.cur) sum(e.cur, cur); else { e.cur = cur; facts.push(cur) } }
+      if (prev) { if (e.prev) sum(e.prev, prev); else { e.prev = prev; facts.push(prev) } }
+      continue
+    }
+    if (e) issues.push({ line, level: 'warning', message: `Duplicate row for ${dims.map(d => base[d]).join(' / ') || base.date}. The later row wins.` })
+    seen.set(key, { cur, prev, frag })
     if (cur) facts.push(cur)
-    else issues.push({ line, level: 'warning', message: 'Zero impressions; row ignored.' })
-    if (prev && typeof prev !== 'string') facts.push(prev)
+    if (prev) facts.push(prev)
   }
+  const note = (n: number, message: string) => { if (n) issues.push({ line: head, level: 'warning', message: `${n.toLocaleString('en-US')} ${message}` }) }
+  note(merged, `row${merged === 1 ? '' : 's'} for #section links were added to their page.`)
+  note(zero, `row${zero === 1 ? '' : 's'} with zero impressions left out.`)
+  note(otherType, `row${otherType === 1 ? '' : 's'} from other search types (image, video, news, Discover) left out; only web search is analysed.`)
+  note(anon, `anonymised row${anon === 1 ? '' : 's'} with no query left out. Use a page-level table for full click totals.`)
   return { facts, total: t.rows.length - 1, skipped, issues, dims, dated, compare, range: lo ? [lo, hi] : null }
+}
+
+/** Adds up rows that share a key (the API returns #section URLs separately; stripping the fragment makes them collide). */
+export function sumDuplicates(facts: Fact[]): Fact[] {
+  const m = new Map<string, Fact>()
+  for (const f of facts) {
+    const k = factKey(f), a = m.get(k)
+    if (!a) { m.set(k, { ...f }); continue }
+    const imp = a.impressions + f.impressions
+    a.position = imp ? (a.position * a.impressions + f.position * f.impressions) / imp : a.position
+    a.clicks += f.clicks; a.impressions = imp
+  }
+  return [...m.values()]
 }
 
 export const factKey = (f: Fact) => `${f.g}\u0001${f.date ?? f.period}\u0001${f.query ?? ''}\u0001${f.page ?? ''}\u0001${f.country ?? ''}\u0001${f.device ?? ''}`

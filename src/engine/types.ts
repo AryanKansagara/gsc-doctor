@@ -39,6 +39,8 @@ export interface Settings {
   decayMonths: number
   /** Ignore queries or pages with fewer impressions per month than this */
   minImpressions: number
+  /** Length in days of an undated export that came without its chart table (compare mode), read from its Filters table */
+  exportDays?: number
 }
 
 export const DEFAULT_SETTINGS: Settings = { brandTerms: [], groupDepth: 1, decayMonths: 6, minImpressions: 30 }

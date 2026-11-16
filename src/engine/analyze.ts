@@ -19,7 +19,11 @@ export function dateBounds(ds: Fact[]): [string, string] | null {
 
 /** Window choices: rolling 28 days / 3 months, each complete calendar month, or the undated export as-is. */
 export function windowOptions(ds: Fact[]): string[] {
-  const b = dateBounds(ds)
+  // Rolling and monthly windows need dated rows with a dimension (API, Sheets, BigQuery). The standard export has
+  // dated site totals only (the chart) next to undated tables, so there the export period is the one honest window.
+  const undated = ds.some(f => !f.date)
+  const datedDims = ds.some(f => f.date && f.g !== '')
+  const b = datedDims || !undated ? dateBounds(ds) : null
   const out: string[] = []
   if (b) {
     out.push('l28')
@@ -28,16 +32,17 @@ export function windowOptions(ds: Fact[]): string[] {
     if (monthEnd(m) > b[1]) m = prevMonth(m)
     while (`${m}-01` >= b[0]) { out.push(m); m = prevMonth(m) }
   }
-  if (ds.some(f => !f.date)) out.push('export')
+  if (undated) out.push('export')
   return out.length ? out : ['export']
 }
 
-export function resolveWindow(ds: Fact[], key: string): Win {
+export function resolveWindow(ds: Fact[], key: string, exportDays?: number): Win {
   const b = dateBounds(ds)
   if (key === 'export' || !b) {
-    // Undated exports: the Dates table (if any) tells how long the period was; Search Console defaults to 3 months.
+    // Undated exports: the chart table (if any) tells how long the period was, then the Filters table
+    // ("Last 28 days", passed in as exportDays); Search Console defaults to 3 months.
     const dated = ds.filter(f => f.g === '' && f.date && f.period !== 'prev')
-    const days = dated.length ? new Set(dated.map(f => f.date)).size : 90
+    const days = dated.length ? new Set(dated.map(f => f.date)).size : exportDays && exportDays > 0 ? exportDays : 90
     return { key: 'export', label: 'Imported export period', cur: null, prev: null, days }
   }
   const roll = (n: number, label: string): Win => {
@@ -81,10 +86,14 @@ function add(m: Map<string, Agg>, f: Fact, dims: Dim[]) {
 }
 
 export function slice(ds: Fact[], dims: Dim[], w: Win, filter?: (f: Fact) => boolean): Slice {
-  const grain = pickGrain(ds, dims)
+  // A dated window reads dated rows only; the export window prefers the undated tables and falls back to dated rows.
+  // Mixing them would scale a 3-month table as if it covered the 28-day window.
+  let pool = ds.filter(f => w.cur ? !!f.date : !f.date)
+  let grain = pickGrain(pool, dims)
+  if (grain === null && !w.cur) { pool = ds.filter(f => !!f.date); grain = pickGrain(pool, dims) }
   const cur = new Map<string, Agg>(), prev = new Map<string, Agg>()
   if (grain === null) return { cur, prev, grain, dated: false }
-  const rows = ds.filter(f => f.g === grain && (!filter || filter(f)))
+  const rows = pool.filter(f => f.g === grain && (!filter || filter(f)))
   const dated = !!w.cur && rows.some(f => f.date)
   for (const f of rows) {
     if (dated) {
@@ -224,9 +233,9 @@ export function queryPoints(ds: Fact[], w: Win, curve: Curve | null, isBrand: (q
 export function siteCurve(ds: Fact[], w: Win, isBrand: (q: string) => boolean, months = 6): Curve {
   const fitWin: Win = w.cur ? { ...w, cur: [addDays(w.cur[1], -Math.round(months * 30.44) + 1), w.cur[1]], prev: ['0000-00-00', '0000-00-00'] } : w
   // One point per query per month, so a query that moved from position 3 to 9 counts as two points, not one at 6.
-  const grain = pickGrain(ds, ['query'])
   const m = new Map<string, { pos: number; clicks: number; imp: number }>()
   const sl = slice(ds, ['query'], fitWin)
+  const grain = sl.grain
   if (!sl.dated) for (const a of sl.cur.values()) m.set(a.key, { pos: pos(a), clicks: a.clicks, imp: a.impressions })
   else for (const f of ds) {
     if (f.g !== grain || !f.date || f.date < fitWin.cur![0] || f.date > fitWin.cur![1] || isBrand(f.query!)) continue
@@ -628,7 +637,7 @@ export interface Analysis {
 }
 
 export function analyze(ds: Fact[], winKey: string, s: Settings): Analysis {
-  const win = resolveWindow(ds, winKey)
+  const win = resolveWindow(ds, winKey, s.exportDays)
   const isBrand = brandMatcher(s.brandTerms)
   const perMonth = 30.44 / win.days
   const curve = siteCurve(ds, win, isBrand)
