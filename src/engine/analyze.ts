@@ -456,7 +456,7 @@ export interface Diagnosis {
   total: DropRow
   rel: number
   by: Partial<Record<Dim | 'group' | 'brand', DropRow[]>>
-  scope: 'none' | 'sitewide' | 'cluster' | 'mixed'
+  scope: 'none' | 'sitewide' | 'cluster' | 'mixed' | 'unknown'
   scopeText: string
   cluster?: string
   changePoint?: { date: string; before: number; after: number; rel: number }
@@ -480,7 +480,8 @@ export function changePoint(daily: { date: string; clicks: number }[], span = 14
   for (let i = span; i + span <= daily.length; i++) {
     const before = daily.slice(i - span, i).reduce((s, d) => s + d.clicks, 0) / span
     const after = daily.slice(i, i + span).reduce((s, d) => s + d.clicks, 0) / span
-    if (!before) continue
+    // Under about 1.5 clicks a day a "step" is noise, not a drop.
+    if (before * span < 20) continue
     const rel = (after - before) / before
     if (rel <= threshold && (!best || rel < best.rel)) best = { date: daily[i].date, before, after, rel }
   }
@@ -489,13 +490,24 @@ export function changePoint(daily: { date: string; clicks: number }[], span = 14
 
 /** Before/after windows around a detected drop, skipping the rollout fortnight itself. */
 export function dropWindow(ds: Fact[]): Win | null {
-  const cp = changePoint(dailyTotals(ds))
+  const daily = dailyTotals(ds)
+  const cp = changePoint(daily)
   if (!cp) return null
-  const prev: [string, string] = [addDays(cp.date, -28), addDays(cp.date, -1)]
-  const cur: [string, string] = [addDays(cp.date, 14), addDays(cp.date, 41)]
-  const b = dateBounds(ds)!
-  if (cur[1] > b[1]) { cur[1] = b[1]; if (cur[0] > cur[1]) cur[0] = addDays(cp.date, 7) }
-  return { key: 'drop', label: `Around the drop on ${cp.date}`, cur, prev, days: dayDiff(cur[0], cur[1]) + 1 }
+  // Equal-length windows that stay inside the data: up to 28 days before, and the same number of days after the rollout fortnight.
+  const first = daily[0].date, last = daily[daily.length - 1].date
+  let start = addDays(cp.date, 14)
+  if (dayDiff(start, last) + 1 < 7) start = addDays(cp.date, 7)
+  const n = Math.min(28, dayDiff(first, cp.date), dayDiff(start, last) + 1)
+  if (n < 7) return null
+  const prev: [string, string] = [addDays(cp.date, -n), addDays(cp.date, -1)]
+  const cur: [string, string] = [start, addDays(start, n - 1)]
+  // A dip that has recovered by the after window (a spike ending, a holiday week) is not a drop to diagnose.
+  // Compared on the typical (median) day, so a short spike inside the before window does not count as a baseline.
+  const typical = (w: [string, string]) => median(daily.filter(d => d.date >= w[0] && d.date <= w[1]).map(d => d.clicks))
+  const total = (w: [string, string]) => daily.reduce((t, d) => d.date >= w[0] && d.date <= w[1] ? t + d.clicks : t, 0)
+  const before = typical(prev), sumBefore = total(prev)
+  if (!before || !sumBefore || typical(cur) / before - 1 > -0.1 || total(cur) / sumBefore - 1 > -0.1) return null
+  return { key: 'drop', label: `Around the drop on ${cp.date}`, cur, prev, days: n }
 }
 
 export function diagnose(ds: Fact[], w: Win, curve: Curve, s: Pick<Settings, 'groupDepth'>, isBrand: (q: string) => boolean): Diagnosis {
@@ -542,6 +554,11 @@ export function diagnose(ds: Fact[], w: Win, curve: Curve, s: Pick<Settings, 'gr
       scope = 'mixed'
       scopeText = `Mixed: losses are spread across several groups (worst is ${worst.key}, ${Math.round(worstRel * 100)}%) while others held.`
     }
+  }
+  else {
+    // Site totals fell but there are no page rows for both periods (a standard export only dates the chart).
+    scope = 'unknown'
+    scopeText = `Clicks are down ${Math.abs(rel * 100).toFixed(1)}%. Without page rows for both periods it is not possible to say whether this is sitewide or one section.`
   }
   const daily = dailyTotals(ds)
   const cp = changePoint(w.cur ? daily.filter(d => d.date >= w.prev![0] && d.date <= w.cur![1]) : daily)

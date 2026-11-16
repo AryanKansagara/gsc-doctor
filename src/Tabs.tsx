@@ -279,10 +279,23 @@ function Drops({ project, ds, a }: TabProps) {
   const updates = useUpdates()
   const d = useMemo(() => diagnose(ds, w, a.curve, project.settings, isBrand), [ds, w, a.curve, project.settings, isBrand, updates.list])
   const daily = useMemo(() => dailyTotals(ds), [ds])
-  const [dim, setDim] = useState<string>('group')
+  const [picked, setDim] = useState<string>('group')
+  const dims = Object.keys(d.by)
+  const dim = dims.includes(picked) ? picked : dims[0] ?? 'group'
   const rows = d.by[dim as keyof typeof d.by] ?? []
   const scale = Math.max(1, ...rows.slice(0, 12).map(r => Math.max(Math.abs(r.demand) + Math.abs(r.rank) + Math.abs(r.ctr), 1)))
-  if (!d.window.cur && !d.total.prev.clicks) return <div className="panel"><Empty title="Needs two periods">Import dated rows, or a Performance export in Compare mode, to diagnose a drop. <p><Link href="/docs#compare" className="btn primary">How</Link></p></Empty></div>
+  if (!d.window.cur && !d.total.prev.clicks) return (
+    <>
+      {daily.length > 28 && <div className="panel">
+        <div className="panel-head"><h2>Clicks over time</h2><span className="muted small">{daily[0].date} to {daily[daily.length - 1].date}</span></div>
+        <p className="small">{d.changePoint
+          ? <>Biggest step down starts <b>{fmtDate(d.changePoint.date)}</b>: 14-day average {fmtN(d.changePoint.before)} → {fmtN(d.changePoint.after)} clicks a day ({fmtPct(d.changePoint.rel)}), but the typical day afterwards is not 10% below the typical day before (or the export ends too soon to tell), so it is not treated as a lasting drop. {d.updates.length ? <>It overlapped <b>{d.updates.map(u => u.name).join(', ')}</b>.</> : 'No Google ranking update was rolling out then.'}</>
+          : 'No step down of 15% or more between any two fortnights in this export.'}</p>
+        <Timeline daily={daily} updates={updates.list} height={170} />
+      </div>}
+      <div className="panel"><Empty title={daily.length > 28 ? 'No drop to split' : 'Needs two periods'}>{daily.length > 28 ? 'To see which pages, queries, devices or countries moved between two periods, import dated rows or a Performance export in Compare mode.' : 'Import dated rows, or a Performance export in Compare mode, to diagnose a drop.'} <p><Link href="/docs#compare" className="btn primary">How</Link></p></Empty></div>
+    </>
+  )
   return (
     <>
       <div className="panel">
@@ -294,7 +307,7 @@ function Drops({ project, ds, a }: TabProps) {
           {d.window.cur && <span className="muted small">Before {d.window.prev![0]} to {d.window.prev![1]} · after {d.window.cur[0]} to {d.window.cur[1]}</span>}
         </div>
         <div className={`verdict ${d.scope}`}>
-          <b>{d.scope === 'cluster' ? 'Page cluster' : d.scope === 'sitewide' ? 'Sitewide' : d.scope === 'mixed' ? 'Mixed' : 'No drop'}</b>
+          <b>{d.scope === 'cluster' ? 'Page cluster' : d.scope === 'sitewide' ? 'Sitewide' : d.scope === 'mixed' ? 'Mixed' : d.scope === 'unknown' ? 'Drop' : 'No drop'}</b>
           <span>{d.scopeText}</span>
         </div>
         {d.changePoint && <p className="small">Biggest step down starts <b>{fmtDate(d.changePoint.date)}</b>: 14-day average {fmtN(d.changePoint.before)} → {fmtN(d.changePoint.after)} clicks a day ({fmtPct(d.changePoint.rel)}).{' '}
@@ -307,14 +320,15 @@ function Drops({ project, ds, a }: TabProps) {
           {(['demand', 'rank', 'ctr'] as const).map(k => <div key={k} className={`kpi ${k}`}><small>{k === 'demand' ? 'Fewer impressions (demand, visibility)' : k === 'rank' ? 'Lower positions (rank)' : 'Lower CTR at the same rank'}</small><b>{signed(d.total[k], n => fmtN(n))}</b></div>)}
         </div>
         <p className="muted tiny">The three parts add up exactly to the change. Rank is the CTR change this site&rsquo;s curve predicts from the position move; CTR is the rest (titles, rich results, AI answers, SERP features). Falling off page one also cuts impressions, so a rank problem often shows up under demand too.</p>
-        <div className="seg-control" role="radiogroup" aria-label="Split by">
-          {Object.keys(d.by).map(k => <button key={k} type="button" role="radio" aria-checked={dim === k} className={dim === k ? 'on' : ''} onClick={() => setDim(k)}>{DIM_LABEL[k]}</button>)}
+        {!dims.length && <p className="small">No split by page, query, device or country for this comparison: those tables in a standard export are not dated, so only site totals can be compared across dates. Export in <Link href="/docs#compare">Compare mode</Link> or import <Link href="/docs#query-page">dated rows</Link> to see which pages and queries moved.</p>}
+        {dims.length > 0 && <><div className="seg-control" role="radiogroup" aria-label="Split by">
+          {dims.map(k => <button key={k} type="button" role="radio" aria-checked={dim === k} className={dim === k ? 'on' : ''} onClick={() => setDim(k)}>{DIM_LABEL[k]}</button>)}
         </div>
         <PartsLegend />
         <div className="table-wrap"><table>
           <thead><tr><th>{DIM_LABEL[dim]}</th><th className="num">Before</th><th className="num">After</th><th className="num">Change</th><th className="num">Position</th><th style={{ minWidth: 160 }}>Split</th><th>Main cause</th></tr></thead>
           <tbody>{rows.slice(0, 25).map(r => <tr key={r.key}><th scope="row" className="break">{dim === 'page' ? shortUrl(r.key) : r.key}</th><td className="num">{fmtN(r.prev.clicks)}</td><td className="num">{fmtN(r.cur.clicks)}</td><td className="num">{delta(r.cur.clicks, r.prev.clicks, n => fmtN(n))}</td><td className="num small">{fmtN(r.prev.position, 1)} → {fmtN(r.cur.position, 1)}</td><td><PartsBar demand={r.demand} rank={r.rank} ctr={r.ctr} scale={scale} /></td><td>{Math.abs(r.delta) >= 1 ? <span className={`cause ${r.cause}`}>{CAUSE[r.cause]}</span> : '—'}</td></tr>)}</tbody>
-        </table></div>
+        </table></div></>}
         <p className="muted tiny">Query rows exclude anonymised queries, so they sum to less than the total. Search Console counts clicks; analytics tools count sessions and lose consented-out visitors, so the two never match exactly.</p>
       </div>
     </>

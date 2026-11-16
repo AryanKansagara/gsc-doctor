@@ -494,3 +494,30 @@ test('bundled public export (lets-plot.org 2024, MIT, JetBrains) imports cleanly
   assert.ok(a.striking.some(p => p.query === 'geom_smooth'))
   assert.equal(a.has.queryPage, false)
 })
+
+test('drop window: equal before/after spans inside the data, and a dip that recovered is not a drop', () => {
+  const series = (f: (i: number) => number, n: number): Fact[] => Array.from({ length: n }, (_, i) => ({ g: '', date: day(i), clicks: f(i), impressions: f(i) * 20, position: 8 }))
+  // 20 days at 100 clicks, then a lasting step down to 50.
+  const w = dropWindow(series(i => i < 20 ? 100 : 50, 80))!
+  assert.equal(w.prev![1], day(19))
+  assert.equal(w.prev![0], day(0))
+  assert.equal(w.days, 20)
+  assert.equal((Date.parse(w.cur![1]) - Date.parse(w.cur![0])) / 86400000 + 1, 20)
+  // A five-day spike ending looks like a step down on a 14-day average, but traffic is back to normal after it.
+  assert.equal(dropWindow(series(i => i >= 16 && i < 21 ? 300 : 100, 80)), null)
+})
+
+test('change point ignores sites with almost no clicks', () => {
+  const daily = Array.from({ length: 60 }, (_, i) => ({ date: day(i), clicks: i < 30 && i % 10 === 0 ? 1 : 0 }))
+  assert.equal(changePoint(daily), undefined)
+})
+
+test('a drop in site totals without dated page rows is reported as a drop of unknown scope, not "no drop"', () => {
+  const ds: Fact[] = Array.from({ length: 80 }, (_, i) => ({ g: '', date: day(i), clicks: i < 30 ? 100 : 50, impressions: 2000, position: 8 }))
+  const w = dropWindow(ds)!
+  const d = diagnose(ds, w, fitCurve([]), DEFAULT_SETTINGS, () => false)
+  assert.equal(d.scope, 'unknown')
+  assert.ok(d.rel <= -0.4)
+  assert.equal(Object.keys(d.by).length, 0)
+  assert.ok(Math.abs(d.total.demand + d.total.rank + d.total.ctr - d.total.delta) < 1e-9)
+})

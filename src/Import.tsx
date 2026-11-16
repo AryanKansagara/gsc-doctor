@@ -129,7 +129,7 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
           <div className="panel-head"><h2>Imported data</h2><span className="muted small">{ds.length.toLocaleString()} rows{rawSize ? ` · ${(rawSize / 1e6).toFixed(2)} MB` : ''}</span></div>
           <div className="table-wrap"><table>
             <thead><tr><th>Source</th><th>Type</th><th className="num">Rows</th><th className="num">Skipped</th><th>Dates</th><th>When</th></tr></thead>
-            <tbody>{[...project.imports].reverse().map(i => <tr key={i.id}><th scope="row" className="break">{i.fileName}</th><td className="small">{i.kind === 'api' ? 'API' : KIND_LABEL[i.kind]}</td><td className="num">{i.rows.toLocaleString()}</td><td className="num">{i.skipped}</td><td className="small">{i.range ? `${i.range[0]} to ${i.range[1]}` : 'undated'}</td><td className="small">{new Date(i.at).toLocaleString()}</td></tr>)}</tbody>
+            <tbody>{[...project.imports].reverse().map(i => <tr key={i.id}><th scope="row" className="break" style={{ minWidth: 170 }}>{i.fileName}</th><td className="small">{i.kind === 'api' ? 'API' : KIND_LABEL[i.kind]}</td><td className="num">{i.rows.toLocaleString()}</td><td className="num">{i.skipped}</td><td className="small" style={{ whiteSpace: 'nowrap' }}>{i.range ? `${i.range[0]} to ${i.range[1]}` : 'undated'}</td><td className="small">{new Date(i.at).toLocaleString()}</td></tr>)}</tbody>
           </table></div>
           <p className="muted small">{sync.user
             ? rawSize > RAW_SYNC_LIMIT ? `These rows are over ${(RAW_SYNC_LIMIT / 1e6).toFixed(1)} MB, so they stay on this device. Settings, titles, done items and snapshots still sync.` : 'Synced to your account with settings, titles and snapshots.'
