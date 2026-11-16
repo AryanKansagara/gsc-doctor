@@ -1,13 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { autoMap, detectKind, mergeFacts, normPage, parseCsv, parseCtr, parseDate, readFile, validate } from './parse.ts'
+import { readFileSync } from 'node:fs'
+import { autoMap, detectKind, filterDays, filtersNote, jsonTable, mergeFacts, normPage, parseCsv, parseCtr, parseDate, parseNum, readFile, sumDuplicates, validate, type Table } from './parse.ts'
 import {
   analyze, brandMatcher, cannibalClusters, cannibalisation, changePoint, checkTitle, compareSnapshots, contentDecay, decompose, diagnose,
-  dropWindow, expectedCtr, fitCurve, isotonicDecreasing, pageGroup, pixelWidth, redirectPlan, resolveWindow, snapshot, suggestTitle, theilSen, windowOptions,
+  dropWindow, expectedCtr, slice, fitCurve, isotonicDecreasing, pageGroup, pixelWidth, redirectPlan, resolveWindow, snapshot, suggestTitle, theilSen, windowOptions,
 } from './analyze.ts'
 import { generate, SAMPLES } from './sample.ts'
 import { DEFAULT_SETTINGS, type Fact } from './types.ts'
-import { updatesNear, UPDATES } from './updates.ts'
+import { BUILT_IN, fromIncidents, mergeUpdates, updatesNear, UPDATES } from './updates.ts'
 
 const day = (n: number) => new Date(Date.UTC(2026, 0, 1) + n * 86400000).toISOString().slice(0, 10)
 
@@ -288,4 +289,208 @@ test('an undated UI export (queries + pages tables) still produces a worklist wi
   assert.equal(a.has.queryPage, false)
   assert.equal(a.cannibals.length, 0)
   assert.ok(a.actions.length > 0)
+})
+
+// ---------- Real export layouts ----------
+// Header rows below are copied from exports that site owners published on GitHub (checked 2026-11-13);
+// data rows are short excerpts or rows written to match the same layout.
+
+const load = (csv: string, name: string) => { const t = parseCsv(csv, name); const map = autoMap(t.rows[0]); return { t, map, kind: detectKind(t, map), v: validate(t, map) } }
+const facts = (tables: Table[]) => tables.reduce<Fact[]>((ds, t) => { const map = autoMap(t.rows[0] ?? []); const k = detectKind(t, map); return k === 'ignored' || k === 'unknown' ? ds : mergeFacts(ds, validate(t, map).facts) }, [])
+
+test('German export: Suchanfragen, Seiten, Geräte, Länder, Diagramm and Filter are all recognised', () => {
+  assert.equal(load('Häufigste Suchanfragen,Klicks,Impressionen,CTR,Position\nsemrush report,0,6,0%,33.5\n', 'Suchanfragen.csv').kind, 'queries')
+  assert.equal(load('Die häufigsten Seiten,Klicks,Impressionen,CTR,Position\nhttps://www.example.de/,3,149,2.01%,3.21\n', 'Seiten.csv').kind, 'pages')
+  assert.equal(load('Land,Klicks,Impressionen,CTR,Position\nDeutschland,3,499,0.6%,4.25\n', 'Länder.csv').kind, 'countries')
+  assert.equal(load('Datum,Klicks,Impressionen,CTR,Position\n2026-01-02,1,40,2.5%,4.1\n', 'Diagramm.csv').kind, 'dates')
+  const d = load('Gerät,Klicks,Impressionen,CTR,Position\nComputer,3,198,1.52%,7.83\nMobil,2,457,0.44%,3.18\nTablet,0,4,0%,4\n', 'Geräte.csv')
+  assert.equal(d.kind, 'devices')
+  assert.deepEqual(d.v.facts.map(f => f.device), ['Desktop', 'Mobile', 'Tablet'])
+  const f = parseCsv('Filtern,Wert\nSuchtyp,Web\nDatum,Letzte 3 Monate', 'Filter.csv')
+  assert.equal(detectKind(f), 'ignored')
+  assert.equal(filtersNote([f]), 'Suchtyp: Web · Datum: Letzte 3 Monate')
+  assert.equal(detectKind(parseCsv('Darstellung in der Suche,Klicks,Impressionen,CTR,Position\nx,1,2,50%,1', 'Darstellung in der Suche.csv')), 'ignored')
+})
+
+test('French, Spanish and Italian exports map every column and normalise device names', () => {
+  const fr = load('Requêtes les plus fréquentes,Clics,Impressions,CTR,Position\ncarbo carcassonne,89,240,37.08%,1.04\n', 'Requêtes.csv')
+  assert.equal(fr.kind, 'queries'); assert.equal(fr.v.facts[0].clicks, 89)
+  assert.equal(load('Pages les plus populaires,Clics,Impressions,CTR,Position\nhttp://example.fr/,150,2598,5.77%,3.06\n', 'Pages.csv').kind, 'pages')
+  assert.deepEqual(load('Appareil,Clics,Impressions,CTR,Position\nMobile,226,3004,7.52%,3.65\nOrdinateur,26,495,5.25%,5.57\nTablette,3,36,8.33%,3.4\n', 'Appareils.csv').v.facts.map(f => f.device), ['Mobile', 'Desktop', 'Tablet'])
+  const es = load('Consultas principales,Clics,Impresiones,CTR,Posición\npoketypes,8,162,4.94%,6.27\n', 'Consultas.csv')
+  assert.equal(es.kind, 'queries'); assert.equal(es.v.facts[0].position, 6.27)
+  assert.deepEqual(load('Dispositivo,Clics,Impresiones,CTR,Posición\nMóviles,11,96,11.46%,6.47\nOrdenador,10,280,3.57%,32.91\n', 'Dispositivos.csv').v.facts.map(f => f.device), ['Mobile', 'Desktop'])
+  assert.equal(load('Query più frequenti,Clic,Impressioni,CTR,Posizione\nunlistened,0,344,0%,9.64\n', 'Query.csv').kind, 'queries')
+  assert.equal(load('Pagine principali,Clic,Impressioni,CTR,Posizione\nhttps://www.example.it/,0,349,0%,9.43\n', 'Pagine.csv').kind, 'pages')
+  const it = load('Data,Clic,Impressioni,CTR,Posizione\n2026-02-07,0,6,0%,31.5\n', 'Grafico.csv')
+  assert.equal(it.kind, 'dates'); assert.deepEqual(it.v.range, ['2026-02-07', '2026-02-07'])
+  assert.deepEqual(load('Dispositivo,Clic,Impressioni,CTR,Posizione\nDispositivo mobile,1,122,0.82%,9.22\nComputer,0,335,0%,12.35\n', 'Dispositivi.csv').v.facts.map(f => f.device), ['Mobile', 'Desktop'])
+})
+
+test('numbers: thousands separators and decimal commas are told apart', () => {
+  assert.equal(parseNum('1,234'), 1234)
+  assert.equal(parseNum('12,345.6'), 12345.6)
+  assert.equal(parseNum('11,75'), 11.75)
+  assert.equal(parseNum('1.234,5'), 1234.5)
+  assert.equal(parseNum('1 234'), 1234)
+  assert.equal(parseCtr('3,65 %'), 0.0365)
+  const v = load('Pays;Clics;Impressions;CTR;Position\nFrance;234;3235;7,23 %;3,75\n', 'Pays.csv').v
+  assert.equal(v.facts[0].position, 3.75); assert.equal(v.issues.length, 0)
+})
+
+test('Analytics Search Console report: "#" preamble is skipped and the long headers map (English and German)', () => {
+  const pre = '# ----------------------------------------\n# Queries: Organic Google Search query\n# Account: Demo\n# ----------------------------------------\n# \n# All Users\n# Start date: 20260414\n# End date: 20260511\n'
+  const en = load(pre + 'Organic Google Search query,Organic Google Search clicks,Organic Google Search impressions,Organic Google Search click-through rate,Organic Google Search average position\nseo reporting,2,30,0.0667,12.5\n', 'Queries.csv')
+  assert.equal(en.kind, 'queries'); assert.equal(en.v.issues.length, 0)
+  assert.deepEqual([en.v.facts[0].clicks, en.v.facts[0].impressions, en.v.facts[0].position], [2, 30, 12.5])
+  assert.equal(en.t.lines[1], 10)
+  const de = load(pre + 'Suchanfrage in den organischen Suchergebnissen bei Google,Klicks in den organischen Suchergebnissen bei Google,Impressionen in den organischen Suchergebnissen bei Google,Klickrate in den organischen Suchergebnissen bei Google,Durchschnittliche Position in den organischen Suchergebnissen bei Google\nseo reporting monatlich,0,3,0,81.66666666666667\n', 'Suchanfragen.csv')
+  assert.equal(de.kind, 'queries'); assert.equal(de.v.facts[0].impressions, 3)
+})
+
+test('compare mode: a query that vanished keeps its previous period and raises no warning', () => {
+  const { v } = load('Top queries,Last 28 days Clicks,Previous 28 days Clicks,Last 28 days Impressions,Previous 28 days Impressions,Last 28 days CTR,Previous 28 days CTR,Last 28 days Position,Previous 28 days Position\n'
+    + 'radiance clinic,37,16,677,466,5.47%,3.43%,11.76,18.9\nclosed comedones,0,0,0,370,0%,0%,0,10.98\nbest skin clinic,1,0,1,0,100%,0%,1,0\n', 'Queries.csv')
+  assert.equal(v.issues.length, 0)
+  assert.deepEqual(v.facts.map(f => `${f.query}:${f.period}:${f.impressions}`), ['radiance clinic:cur:677', 'radiance clinic:prev:466', 'closed comedones:prev:370', 'best skin clinic:cur:1'])
+})
+
+test('jump-link rows are added to their page instead of replacing it (lets-plot.org excerpt)', () => {
+  const { v } = load('Top pages,Clicks,Impressions,CTR,Position\nhttps://lets-plot.org/python/index.html,246,17436,1.41%,13.6\nhttps://lets-plot.org/python/index.html#python-index-user-guide,0,1043,0%,3.32\nhttps://lets-plot.org/python/index.html#user-guide,0,65,0%,4.08\n', 'Pages.csv')
+  assert.equal(v.facts.length, 1)
+  assert.equal(v.facts[0].clicks, 246)
+  assert.equal(v.facts[0].impressions, 17436 + 1043 + 65)
+  assert.ok(Math.abs(v.facts[0].position - (13.6 * 17436 + 3.32 * 1043 + 4.08 * 65) / 18544) < 1e-9)
+  assert.deepEqual(v.issues.map(i => i.message), ['2 rows for #section links were added to their page.'])
+  // The API returns the same thing as separate keys.
+  const api = sumDuplicates([{ g: 'page', date: '2026-01-01', page: 'https://a.example/x', clicks: 4, impressions: 100, position: 2 }, { g: 'page', date: '2026-01-01', page: 'https://a.example/x', clicks: 1, impressions: 300, position: 6 }])
+  assert.deepEqual(api.map(f => [f.clicks, f.impressions, f.position]), [[5, 400, 5]])
+})
+
+test('raw BigQuery searchdata_url_impression: zero-based sum_position, anonymised and non-web rows', () => {
+  const head = 'data_date,site_url,url,query,is_anonymized_query,is_anonymized_discover,country,search_type,device,impressions,clicks,sum_position'
+  const { kind, v } = load(head + '\n5/7/2024,https://nbastats.pro/,https://nbastats.pro/player/Larry_Bird,bird stats,FALSE,FALSE,esp,WEB,DESKTOP,4,1,10\n5/7/2024,https://nbastats.pro/,https://nbastats.pro/,,TRUE,FALSE,are,WEB,MOBILE,1,0,0\n5/8/2024,https://nbastats.pro/,https://nbastats.pro/,nba stats,FALSE,FALSE,usa,IMAGE,MOBILE,9,0,27\n', 'url.csv')
+  assert.equal(kind, 'rows')
+  assert.equal(v.facts.length, 1)
+  assert.deepEqual([v.facts[0].date, v.facts[0].country, v.facts[0].device, v.facts[0].position], ['2024-05-07', 'ESP', 'Desktop', 3.5])
+  assert.equal(v.skipped, 0)
+  assert.equal(v.issues.length, 2)
+  assert.ok(v.issues.every(i => i.level === 'warning'))
+})
+
+test('Search Analytics API JSON: unnamed keys are recognised by their values', () => {
+  const t = jsonTable({ rows: [
+    { keys: ['2026-10-01', 'banana bread recipe', 'https://a.example/banana-bread/', 'usa', 'MOBILE'], clicks: 12, impressions: 340, ctr: 0.0353, position: 5.4 },
+    { keys: ['2026-10-01', 'usa', 'https://a.example/usa-guide/', 'gbr', 'DESKTOP'], clicks: 1, impressions: 20, ctr: 0.05, position: 9 },
+  ] })
+  assert.deepEqual(t.rows[0], ['date', 'query', 'page', 'country', 'device', 'clicks', 'impressions', 'ctr', 'position'])
+  const v = validate(t, autoMap(t.rows[0]))
+  assert.equal(detectKind(t), 'rows')
+  assert.deepEqual(v.facts.map(f => [f.g, f.query, f.country, f.device]), [['query|page|country|device', 'banana bread recipe', 'USA', 'Mobile'], ['query|page|country|device', 'usa', 'GBR', 'Desktop']])
+  const flat = jsonTable([{ data_date: { value: '2026-10-01' }, url: 'https://a.example/', clicks: 3, impressions: 10, position: 2 }])
+  assert.equal(validate(flat, autoMap(flat.rows[0])).facts[0].date, '2026-10-01')
+  assert.throws(() => jsonTable({ error: { code: 403 } }), /No rows/)
+})
+
+test('readFile routes JSON by content, not by extension', async () => {
+  const buf = new TextEncoder().encode(JSON.stringify({ rows: [{ keys: ['shoes'], clicks: 1, impressions: 9, ctr: 0.11, position: 3 }] })).buffer as ArrayBuffer
+  const [t] = await readFile('response.txt', buf)
+  assert.deepEqual(t.rows[1], ['shoes', '1', '9', '0.11', '3'])
+})
+
+test('export length is read from the Filters table in several languages', () => {
+  const f = (h: string, row: string) => filterDays([parseCsv(`${h}\n${row}`, 'Filters.csv')])
+  assert.equal(f('Filter,Value', 'Date,Last 28 days'), 28)
+  assert.equal(f('Filter,Value', 'Date,Last 3 months'), 91)
+  assert.equal(f('Filtern,Wert', 'Datum,Letzte 7 Tage'), 7)
+  assert.equal(f('Filtrar,Valor', 'Fecha,Últimos 3 meses'), 91)
+  assert.equal(f('Filtra,Valore', 'Data,Ultimi 16 mesi'), 487)
+  assert.equal(f('Filter,Value', 'Date,1 Jan 2024-18 Dec 2024'), 353)
+  assert.equal(f('Filtre,Valeur', 'Date,1 juin 2026-30 juin 2026'), null)
+  assert.equal(filterDays([parseCsv('Top queries,Clicks\nx,1')]), null)
+})
+
+test('a standard export is analysed as its own period, not rescaled to a 28-day window', () => {
+  // 91 daily rows (some with no impressions) next to undated 3-month tables, as in the zip.
+  const chart = 'Date,Clicks,Impressions,CTR,Position\n' + Array.from({ length: 91 }, (_, i) => i % 9 === 0 ? `${day(i)},0,0,,` : `${day(i)},10,200,5%,7`).join('\n')
+  const ds = facts([
+    parseCsv(chart, 'Chart.csv'),
+    parseCsv('Top queries,Clicks,Impressions,CTR,Position\nmini diary,300,3000,10%,3\nencrypted journal,90,6000,1.5%,9\n', 'Queries.csv'),
+    parseCsv('Top pages,Clicks,Impressions,CTR,Position\nhttps://a.example/,500,9000,5.56%,6\nhttps://a.example/journal/,300,7000,4.29%,8\n', 'Pages.csv'),
+    parseCsv('Device,Clicks,Impressions,CTR,Position\nDesktop,600,12000,5%,7\nMobile,200,4000,5%,7\n', 'Devices.csv'),
+  ])
+  assert.equal(ds.filter(f => f.g === '').length, 91)
+  assert.deepEqual(windowOptions(ds), ['export'])
+  const a = analyze(ds, 'export', DEFAULT_SETTINGS)
+  assert.equal(a.win.days, 91)
+  const perMonth = 30.44 / 91
+  assert.ok(Math.abs(a.totals.cur.clicks - 800 * perMonth) < 1e-6)
+  assert.ok(Math.abs(a.points.reduce((s2, p) => s2 + p.clicks, 0) - 390 * perMonth) < 1e-6)
+  assert.ok(Math.abs(a.pages.reduce((s2, p) => s2 + p.clicks, 0) - 800 * perMonth) < 1e-6)
+})
+
+test('compare export without a chart takes its length from exportDays', () => {
+  const t = parseCsv('Device,Last 28 days Clicks,Previous 28 days Clicks,Last 28 days Impressions,Previous 28 days Impressions,Last 28 days CTR,Previous 28 days CTR,Last 28 days Position,Previous 28 days Position\nMobile,414,436,38443,41348,1.08%,1.05%,7.92,9.04\nDesktop,101,94,12121,14763,0.83%,0.64%,29.76,27.43\n', 'Devices.csv')
+  const ds = facts([t])
+  assert.equal(resolveWindow(ds, 'export').days, 90)
+  const a = analyze(ds, 'export', { ...DEFAULT_SETTINGS, exportDays: 28 })
+  assert.equal(a.win.days, 28)
+  assert.ok(Math.abs(a.totals.cur.clicks - 515 * 30.44 / 28) < 1e-6)
+  assert.ok(Math.abs(a.totals.prev!.clicks - 530 * 30.44 / 28) < 1e-6)
+})
+
+test('dated windows read dated rows only when API rows and an undated export sit side by side', () => {
+  const api: Fact[] = Array.from({ length: 60 }, (_, i) => ({ g: 'query|page', date: day(i), query: 'q', page: 'https://a.example/p', clicks: 2, impressions: 50, position: 4 }))
+  const ui: Fact[] = [{ g: 'query', period: 'cur', query: 'q', clicks: 9000, impressions: 90000, position: 4 }]
+  const ds = [...api, ...ui]
+  assert.deepEqual(windowOptions(ds).slice(0, 1), ['l28'])
+  assert.ok(windowOptions(ds).includes('export'))
+  const dated = slice(ds, ['query'], resolveWindow(ds, 'l28'))
+  assert.equal(dated.grain, 'query|page')
+  assert.equal([...dated.cur.values()][0].clicks, 56)
+  const exp = slice(ds, ['query'], resolveWindow(ds, 'export'))
+  assert.equal(exp.grain, 'query')
+  assert.equal([...exp.cur.values()][0].clicks, 9000)
+})
+
+test('status feed: ranking incidents become updates, open ones are still rolling out', () => {
+  // Shape of https://status.search.google.com/incidents.json, trimmed to the fields read.
+  const feed = [
+    { begin: '2026-11-10T18:06:00+00:00', external_desc: 'November 2026 core update', service_name: 'Ranking', updates: [{ text: 'Released the November 2026 core update. The rollout may take up to 2 weeks to complete.' }] },
+    { begin: '2026-09-24T16:15:00+00:00', end: '2026-10-08T08:00:00+00:00', external_desc: 'September 2026 spam update', service_name: 'Ranking' },
+    { begin: '2026-02-25T03:55:00+00:00', end: '2026-02-25T04:10:00+00:00', external_desc: 'Serving was experiencing an issue', service_name: 'Serving' },
+    { begin: '2026-02-05T17:00:00+00:00', end: '2026-02-27T10:00:00+00:00', external_desc: 'February 2026 Discover update', service_name: 'Ranking' },
+  ]
+  const live = fromIncidents(feed, '2026-11-13')
+  assert.deepEqual(live.map(u => [u.name, u.start, u.days, u.kind, !!u.ongoing]), [
+    ['November 2026 core update', '2026-11-10', 14, 'core', true],
+    ['September 2026 spam update', '2026-09-24', 14, 'spam', false],
+    ['February 2026 Discover update', '2026-02-05', 22, 'other', false],
+  ])
+  assert.equal(fromIncidents(feed, '2026-12-20')[0].days, 40)
+  assert.deepEqual(fromIncidents({ error: 'x' }, '2026-11-13'), [])
+  // The built-in table agrees with the feed for every update the feed still lists.
+  for (const u of live.filter(x => !x.ongoing)) assert.equal(BUILT_IN.find(b => b.name === u.name)?.days, u.days)
+  const merged = mergeUpdates(BUILT_IN, [...live, { name: 'December 2026 spam update', start: '2026-12-02', days: 3, kind: 'spam' }])
+  assert.equal(merged.length, BUILT_IN.length + 1)
+  assert.equal(merged[0].name, 'December 2026 spam update')
+  assert.deepEqual(updatesNear('2026-11-12', '2026-11-13', merged).map(u => u.name), ['November 2026 core update'])
+})
+
+test('bundled public export (lets-plot.org 2024, MIT, JetBrains) imports cleanly end to end', async () => {
+  const b = readFileSync(new URL('../../public/samples/lets-plot-org-2024.zip', import.meta.url))
+  const tables = await readFile('lets-plot.zip', b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer)
+  assert.equal(tables.length, 7)
+  assert.equal(filterDays(tables), 353)
+  for (const t of tables) { const k = detectKind(t); if (k !== 'ignored') assert.equal(validate(t, autoMap(t.rows[0])).skipped, 0, t.name) }
+  const ds = facts(tables)
+  const a = analyze(ds, 'export', DEFAULT_SETTINGS)
+  assert.equal(a.win.days, 339)
+  // Site, device and country tables agree on the click total; pages overlap slightly because one search can show two URLs.
+  const sum = (g: string) => ds.filter(f => f.g === g).reduce((s2, f) => s2 + f.clicks, 0)
+  assert.deepEqual([sum(''), sum('device'), sum('country')], [14429, 14429, 14429])
+  assert.equal(a.curve.kind, 'isotonic')
+  assert.ok(a.curve.knots.every((k, i, all) => i === 0 || k.ctr <= all[i - 1].ctr + 1e-12))
+  assert.ok(a.striking.some(p => p.query === 'geom_smooth'))
+  assert.equal(a.has.queryPage, false)
 })

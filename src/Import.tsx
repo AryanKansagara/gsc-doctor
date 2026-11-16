@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { addDays } from './engine/updates.ts'
 import { autoMap, detectKind, factsToCsv, FIELDS, filterDays, filtersNote, sumDuplicates, KIND_LABEL, mergeFacts, readFile, validate, type Mapping, type Table, type TableKind } from './engine/parse.ts'
 import type { Fact, Settings } from './engine/types.ts'
@@ -7,11 +7,14 @@ import { putData, saveProject, uuid, type Project } from './store.ts'
 import { RAW_SYNC_LIMIT, useSync } from './sync.ts'
 import { ask, download, go, Link, toast } from './ui.tsx'
 
+export const PUBLIC_EXPORT = { url: '/samples/lets-plot-org-2024.zip', file: 'lets-plot.org-Performance-on-Search-2024-12-18.zip', label: 'lets-plot.org, Jan to Dec 2024' }
+
 interface Pending { id: string; file: string; table: Table; map: Mapping; kind: TableKind }
 
 export default function DataTab({ project, ds, update }: { project: Project; ds: Fact[]; update(p: Partial<Project>): void }) {
   const [pending, setPending] = useState<Pending[]>([])
   const [note, setNote] = useState('')
+  const [days, setDays] = useState<number | null>(null)
   const [drag, setDrag] = useState(false)
   const [busy, setBusy] = useState(false)
   const input = useRef<HTMLInputElement>(null)
@@ -27,6 +30,8 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
         const tables = await readFile(f.name, await f.arrayBuffer())
         const n = filtersNote(tables)
         if (n) setNote(n)
+        const d = filterDays(tables)
+        if (d) setDays(d)
         for (const t of tables) {
           if (t.rows.length < 2) continue
           const map = autoMap(t.rows[0])
@@ -48,11 +53,29 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
     for (const i of items) merged = mergeFacts(merged, i.facts)
     await putData(t.id, merged)
     const metas = items.map(i => ({ id: uuid(), kind: i.p.kind, fileName: i.p.file, rows: i.facts.length, skipped: i.skipped, at: Date.now(), range: i.range }))
-    await saveProject({ ...t, imports: [...(project.sampleId ? [] : project.imports), ...metas], dataMissing: false })
+    // An undated export without its chart (compare mode) only states its length in the Filters table.
+    const undated = items.some(i => i.facts.some(f => !f.date))
+    await saveProject({ ...t, settings: days && undated ? { ...t.settings, exportDays: days } : t.settings, imports: [...(project.sampleId ? [] : project.imports), ...metas], dataMissing: false })
     setPending(x => x.filter(y => !items.some(i => i.p.id === y.id)))
     toast(`Imported ${items.reduce((s, i) => s + i.facts.length, 0).toLocaleString()} rows from ${items.length} table${items.length > 1 ? 's' : ''}`, { tone: 'ok' })
     if (project.sampleId) go(`/app/p/${t.id}`)
   }
+
+  /** A real Performance export, published by its owner under the MIT licence, run through the same importer as a dropped file. */
+  const loadPublic = async () => {
+    try {
+      const r = await fetch(PUBLIC_EXPORT.url)
+      if (!r.ok) throw new Error(String(r.status))
+      await readFiles([new File([await r.blob()], PUBLIC_EXPORT.file)])
+    } catch { toast('Could not load the public export. Check your connection and try again.', { tone: 'error' }) }
+  }
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('load') !== 'public') return
+    history.replaceState({}, '', location.pathname)
+    void loadPublic()
+  }, [])
+  // Only an undated export with no daily chart needs its length stated.
+  const needsDays = ds.some(f => !f.date) && !ds.some(f => f.date && f.g === '')
 
   const ready = pending.filter(p => p.kind !== 'ignored' && p.kind !== 'unknown')
   const setS = (patch: Partial<Settings>) => update({ settings: { ...project.settings, ...patch } })
@@ -61,10 +84,10 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
     <>
       {project.dataMissing && <div className="banner warn"><span><strong>This site&rsquo;s raw rows are on another device.</strong> Settings, titles and snapshots synced; exports over {(RAW_SYNC_LIMIT / 1e6).toFixed(1)} MB stay where they were imported. Re-import here to recompute.</span></div>}
       {!ds.length && !pending.length && (
-        <div className="banner"><span><strong>Start here.</strong> In Search Console open Performance → Search results, set the date range, click Export → Download CSV (or Excel), and drop the zip below. For cannibalisation, add <Link href="/docs#query-page">query + page rows</Link>.</span></div>
+        <div className="banner"><span><strong>Start here.</strong> In Search Console open Performance → Search results, set the date range, click Export → Download CSV (or Excel), and drop the zip below. For cannibalisation, add <Link href="/docs#query-page">query + page rows</Link>. Nothing to hand? <button type="button" className="linkish" onClick={() => void loadPublic()}>Load a real public export</button> ({PUBLIC_EXPORT.label}).</span></div>
       )}
       <div className="panel">
-        <div className="panel-head"><h2>Import</h2><span className="muted small">Search Console zip or Excel export · query + page CSV (API, Sheets, Looker Studio, BigQuery)</span></div>
+        <div className="panel-head"><h2>Import</h2><span className="muted small">Search Console zip or Excel export in any interface language · query + page CSV or JSON (API, Sheets, Looker Studio, BigQuery)</span></div>
         {project.sampleId && <p className="muted small">This is a synthetic sample, so it is read-only. Importing here starts a new site. Want to rehearse? <button type="button" className="linkish" onClick={() => download(`${project.sampleId}-rows.csv`, factsToCsv(ds.filter(f => f.g === 'query|page' && f.date! >= '2026-08-01')))}>Download 3 months of sample rows</button> and drop them back in.</p>}
         <div className={`drop${drag ? ' over' : ''}`} role="button" tabIndex={0} aria-label="Choose Search Console export files to import"
           onClick={() => input.current?.click()} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.current?.click() } }}
@@ -72,8 +95,8 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
           onDrop={e => { e.preventDefault(); setDrag(false); void readFiles(e.dataTransfer.files) }}>
           <svg viewBox="0 0 24 24" width="32" height="32" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" /></svg>
           <h3>{busy ? 'Reading files' : 'Drop exports here, or click to choose'}</h3>
-          <p className="muted small" style={{ margin: 0 }}>.zip, .xlsx, .csv. Parsed in your browser. Re-importing the same dates replaces them instead of double counting.</p>
-          <input ref={input} type="file" accept=".zip,.xlsx,.csv,.tsv,.txt" multiple hidden onChange={e => { if (e.target.files) void readFiles(e.target.files); e.target.value = '' }} />
+          <p className="muted small" style={{ margin: 0 }}>.zip, .xlsx, .csv, .json. Parsed in your browser. Re-importing the same dates replaces them instead of double counting.</p>
+          <input ref={input} type="file" accept=".zip,.xlsx,.csv,.tsv,.txt,.json" multiple hidden onChange={e => { if (e.target.files) void readFiles(e.target.files); e.target.value = '' }} />
         </div>
         {note && <p className="small muted" style={{ marginTop: 10 }}>Export filters: {note}</p>}
       </div>
@@ -96,7 +119,9 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
           <label className="field"><span>Page group depth</span><input type="number" min="1" max="4" value={project.settings.groupDepth} onChange={e => setS({ groupDepth: Math.min(4, Math.max(1, Number(e.target.value) || 1)) })} /></label>
           <label className="field"><span>Decay lookback (months)</span><input type="number" min="3" max="16" value={project.settings.decayMonths} onChange={e => setS({ decayMonths: Math.min(16, Math.max(3, Number(e.target.value) || 6)) })} /></label>
           <label className="field"><span>Min impressions / month</span><input type="number" min="0" value={project.settings.minImpressions} onChange={e => setS({ minImpressions: Math.max(0, Number(e.target.value) || 0) })} /></label>
+          {needsDays && <label className="field"><span>Export period (days)</span><input type="number" min="1" max="500" value={project.settings.exportDays ?? 90} onChange={e => setS({ exportDays: Math.min(500, Math.max(1, Math.round(Number(e.target.value)) || 90)) })} /></label>}
         </div>
+        {needsDays && <p className="muted small" style={{ marginBottom: 0 }}>This export has no daily chart, so its length comes from its Filters table (or 90 days if that is missing). Monthly figures scale from it: set 28 for a &ldquo;Last 28 days&rdquo; export.</p>}
       </div>
 
       {(project.imports.length > 0 || ds.length > 0) && (

@@ -4,12 +4,12 @@ import {
   type Action, type ActionKind, type Analysis, type DropRow, type QueryPoint,
 } from './engine/analyze.ts'
 import { toCsv } from './engine/parse.ts'
-import { UPDATES, UPDATES_CHECKED } from './engine/updates.ts'
+import { UPDATES_CHECKED } from './engine/updates.ts'
 import { CtrScatter, FixCard, PartsBar, PartsLegend, Spark, Timeline } from './charts.tsx'
 import type { Tab, TabProps } from './Project.tsx'
 import { deleteSnapshotCloud } from './sync.ts'
 import type { Project } from './store.ts'
-import { ask, CopyButton, download, Empty, fmtDate, fmtK, fmtN, fmtPct, Link, signed, toast } from './ui.tsx'
+import { ask, CopyButton, download, Empty, fmtDate, fmtK, fmtN, fmtPct, Link, signed, toast, useUpdates } from './ui.tsx'
 
 export default function Tabs(p: TabProps & { tab: Tab }) {
   switch (p.tab) {
@@ -48,6 +48,7 @@ function Kpis({ a }: { a: Analysis }) {
 
 function Overview({ project, ds, a, win }: TabProps) {
   const daily = useMemo(() => dailyTotals(ds), [ds])
+  const updates = useUpdates()
   const glowing = a.points.filter(p => p.gap >= 20 && !p.branded).sort((x, y) => y.gap - x.gap)
   const [picked, setPicked] = useState<QueryPoint | null>(null)
   const pick = picked ?? glowing[0] ?? null
@@ -60,8 +61,8 @@ function Overview({ project, ds, a, win }: TabProps) {
       <Kpis a={a} />
       {!a.has.queryPage && <div className="banner warn"><span><strong>No query + page rows yet.</strong> The Performance export has queries and pages in separate tables, so cannibalisation and per-page CTR fixes are limited. <Link href="/docs#query-page">Get query + page rows</Link> (free, about 5 minutes).</span></div>}
       {daily.length > 1 && <div className="panel">
-        <div className="panel-head"><h2>Clicks over time</h2><span className="muted small">7-day average · Google updates checked {UPDATES_CHECKED}</span></div>
-        <Timeline daily={daily} updates={UPDATES} bands={a.win.cur ? [{ from: a.win.cur[0], to: a.win.cur[1], label: 'current' }] : []} />
+        <div className="panel-head"><h2>Clicks over time</h2><span className="muted small">7-day average · Google updates {updates.live ? 'live from the Search Status Dashboard' : `checked ${UPDATES_CHECKED}`}</span></div>
+        <Timeline daily={daily} updates={updates.list} bands={a.win.cur ? [{ from: a.win.cur[0], to: a.win.cur[1], label: 'current' }] : []} />
       </div>}
       <div className="grid-scatter">
         <div className="panel">
@@ -275,7 +276,8 @@ function Drops({ project, ds, a }: TabProps) {
   const [mode, setMode] = useState<'auto' | 'window'>(auto ? 'auto' : 'window')
   const w = mode === 'auto' && auto ? auto : a.win
   const isBrand = useMemo(() => brandMatcher(project.settings.brandTerms), [project.settings.brandTerms])
-  const d = useMemo(() => diagnose(ds, w, a.curve, project.settings, isBrand), [ds, w, a.curve, project.settings, isBrand])
+  const updates = useUpdates()
+  const d = useMemo(() => diagnose(ds, w, a.curve, project.settings, isBrand), [ds, w, a.curve, project.settings, isBrand, updates.list])
   const daily = useMemo(() => dailyTotals(ds), [ds])
   const [dim, setDim] = useState<string>('group')
   const rows = d.by[dim as keyof typeof d.by] ?? []
@@ -297,7 +299,7 @@ function Drops({ project, ds, a }: TabProps) {
         </div>
         {d.changePoint && <p className="small">Biggest step down starts <b>{fmtDate(d.changePoint.date)}</b>: 14-day average {fmtN(d.changePoint.before)} → {fmtN(d.changePoint.after)} clicks a day ({fmtPct(d.changePoint.rel)}).{' '}
           {d.updates.length ? <>Overlaps <b>{d.updates.map(u => u.name).join(', ')}</b>.</> : 'No Google ranking update was rolling out then: look at your own changes first (deploys, robots.txt, noindex, migrations, tracking).'}</p>}
-        {daily.length > 1 && <Timeline daily={daily} updates={UPDATES} bands={d.window.cur ? [{ from: d.window.prev![0], to: d.window.prev![1], label: 'before' }, { from: d.window.cur[0], to: d.window.cur[1], label: 'after' }] : []} height={170} />}
+        {daily.length > 1 && <Timeline daily={daily} updates={updates.list} bands={d.window.cur ? [{ from: d.window.prev![0], to: d.window.prev![1], label: 'before' }, { from: d.window.cur[0], to: d.window.cur[1], label: 'after' }] : []} height={170} />}
       </div>
       <div className="panel">
         <div className="panel-head"><h2>Where the clicks went</h2><span className="muted small">{fmtN(d.total.prev.clicks)} → {fmtN(d.total.cur.clicks)} clicks ({fmtPct(d.rel, 1)})</span></div>

@@ -70,7 +70,7 @@ export default function ProjectView({ id, tab: rawTab }: { id: string; tab: stri
         <div>
           <div className="eyebrow"><Link href="/app">Sites</Link></div>
           <h1 className="row gap wrap">{project.name} {project.sampleId && <SyntheticBadge />}</h1>
-          {a && <p className="muted small" style={{ margin: 0 }}>{a.win.label}{a.win.cur ? ` · ${a.win.cur[0]} to ${a.win.cur[1]}` : ''} · compared with the previous {a.win.days} days · {a.actions.length} actions</p>}
+          {a && <p className="muted small" style={{ margin: 0 }}>{a.win.label}{a.win.cur ? ` · ${a.win.cur[0]} to ${a.win.cur[1]}` : ` · ${a.win.days} days`}{a.totals.prev ? ` · compared with the previous ${a.win.cur ? `${a.win.days} days` : 'period'}` : ''} · {a.actions.length} actions</p>}
         </div>
         {!empty && (
           <div className="toolbar">

@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
-import { UPDATES, UPDATES_CHECKED, updateEnd } from './engine/updates.ts'
-import { Code, Link } from './ui.tsx'
+import { UPDATES_CHECKED, UPDATES_FEED, updateEnd } from './engine/updates.ts'
+import { Code, Link, useUpdates } from './ui.tsx'
 
 const CHECKED = '2026-11-09'
 
@@ -81,6 +81,7 @@ WHERE data_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 6 MONTH)
 GROUP BY date, device, country`
 
 export default function Docs() {
+  const updates = useUpdates()
   useEffect(() => {
     const h = location.hash.slice(1)
     if (h) requestAnimationFrame(() => document.getElementById(h)?.scrollIntoView())
@@ -95,6 +96,7 @@ export default function Docs() {
         <a href="#formats">Accepted formats</a>
         <a href="#method">How the numbers work</a>
         <a href="#updates">Google update dates</a>
+        <a href="#sources">Data sources</a>
         <a href="#faq">FAQ</a>
       </aside>
       <div className="docs-body">
@@ -130,6 +132,9 @@ export default function Docs() {
         <Code code={BQ_ROWS} label="BigQuery SQL · query + page" />
         <Code code={BQ_PAGES} label="BigQuery SQL · pages" />
         <Code code={BQ_SITE} label="BigQuery SQL · site, device, country" />
+        <p className="small muted">A raw export of <code>searchdata_url_impression</code> also imports as-is: <code>sum_position</code> is converted to an average position (sum ÷ impressions + 1, because Google stores it zero-based), rows of other search types (image, video, news, Discover) are left out, and anonymised rows with no query are counted and left out.</p>
+        <h3>e. API Explorer JSON</h3>
+        <p>The <b>Try this API</b> panel on the <code>searchanalytics.query</code> reference page returns JSON. Save the response as a <code>.json</code> file and drop it in: the unnamed <code>keys</code> are recognised by their values (dates, URLs, device names, three-letter country codes; anything else is the query).</p>
 
         <h2 id="live">4. Live pull with your own client ID (optional)</h2>
         <p>The app can call the Search Console API straight from the browser using Google&rsquo;s token flow (no client secret, no server, the token lives only in the tab). It does not ship a shared client ID: <code>webmasters.readonly</code> is a sensitive scope, so a public client needs Google&rsquo;s app verification, and the authorization-code flow with PKCE still requires a client secret for web clients. Your own client in testing mode avoids both:</p>
@@ -142,10 +147,13 @@ export default function Docs() {
 
         <h2 id="formats">Accepted formats</h2>
         <ul>
-          <li>Search Console Performance export: the CSV zip or the Excel workbook, normal or Compare mode.</li>
+          <li>Search Console Performance export: the CSV zip or the Excel workbook, normal or Compare mode. The newer <code>Chart.csv</code> and the older <code>Dates.csv</code> are both read.</li>
+          <li>Exports made with Search Console set to another language: German, French, Spanish and Italian headers and device names are checked against real exports (<code>Häufigste Suchanfragen</code>, <code>Requêtes les plus fréquentes</code>, <code>Consultas principales</code>, <code>Query più frequenti</code>, <code>Klicks</code>, <code>Clics</code>, <code>Impresiones</code>, <code>Posizione</code>…); Portuguese and Dutch are mapped from Google&rsquo;s interface wording. Decimal commas (<code>11,75</code>) are read as decimals.</li>
+          <li>The Search Console report exported from Google Analytics (<code>Organic Google Search query</code>, <code>… clicks</code>, <code>… impressions</code>, <code>… average position</code>); its <code>#</code> comment lines are skipped.</li>
+          <li>Search Analytics API responses as JSON, and the raw BigQuery <code>searchdata_url_impression</code> table with <code>sum_position</code>.</li>
           <li>Any CSV/TSV with clicks, impressions and position, plus any of date, query, page, country, device. Header synonyms such as <code>Top queries</code>, <code>Landing Page</code>, <code>Url Clicks</code>, <code>Average Position</code> and <code>data_date</code> map automatically; anything else can be mapped by hand.</li>
           <li>Dates: <code>2026-11-07</code>, <code>11/7/2026</code>, <code>20261107</code> or Excel serial days. CTR: <code>3.2%</code> or <code>0.032</code> (CTR is recomputed from clicks / impressions).</li>
-          <li>Validation lists every skipped row with its line number: bad numbers, clicks above impressions, positions under 1, unreadable dates, empty queries, duplicates. URLs lose <code>#fragments</code> so jump links do not look like separate pages.</li>
+          <li>Validation lists every skipped row with its line number: bad numbers, clicks above impressions, positions under 1, unreadable dates, empty queries, duplicates. URLs lose <code>#fragments</code>, and the rows Search Console lists for a page&rsquo;s jump links are added to that page (clicks and impressions summed, position weighted by impressions).</li>
         </ul>
 
         <h2 id="method">How the numbers work</h2>
@@ -161,15 +169,23 @@ export default function Docs() {
           <dt>Drop diagnosis</dt>
           <dd>Change in clicks = demand + rank + CTR, exactly. Demand = Δimpressions × old CTR. Rank = new impressions × old CTR × (expected CTR at new position / expected at old − 1). CTR = the rest. Run per page group, page, query, device, country and brand. A drop is a <b>cluster</b> when one group holds 60%+ of losses, fell 20%+, and the rest of the site moved less than −10%; <b>sitewide</b> when 60%+ of groups with real traffic fell 10%+. The change point is the day where the 14-day average after falls furthest below the 14 days before (at least 15%).</dd>
           <dt>Monthly numbers</dt>
-          <dd>All per-month figures scale the selected range to 30.44 days. Undated exports assume the length of the Dates table, else 3 months (Search Console&rsquo;s default).</dd>
+          <dd>All per-month figures scale the selected range to 30.44 days. An undated export takes its length from its chart table (<code>Chart.csv</code> / <code>Dates.csv</code>), else from its Filters table (&ldquo;Last 28 days&rdquo;), else 3 months (Search Console&rsquo;s default); you can correct it under Data &amp; settings. Rolling and monthly ranges are offered only when rows with a dimension are dated (API, Sheets, Looker Studio, BigQuery): a standard export covers one period, so it is analysed as that period.</dd>
         </dl>
 
         <h2 id="updates">Google ranking update dates</h2>
-        <p className="small muted">From the Google Search Status Dashboard (Ranking history), checked {UPDATES_CHECKED}. Rollout end = start + listed duration. Shaded on every timeline.</p>
+        <p className="small muted">From the <a href="https://status.search.google.com/products/rGHU1u87FJnkP6W2GwMi/history" rel="noreferrer">Google Search Status Dashboard</a> (Ranking history). The built-in table was checked {UPDATES_CHECKED}; on load the app also reads the dashboard&rsquo;s public feed (<code>{UPDATES_FEED}</code>) and merges in anything newer. {updates.live ? 'The feed loaded: this table includes it.' : 'The feed has not loaded, so this is the built-in table.'} Dates are UTC. Rollout end = start + listed duration; an update still rolling out runs to today or to the length Google announced. Shaded on every timeline.</p>
         <div className="table-wrap"><table>
           <thead><tr><th>Update</th><th>Start</th><th>End</th><th className="num">Days</th></tr></thead>
-          <tbody>{UPDATES.map(u => <tr key={u.name}><th scope="row">{u.name}</th><td>{u.start}</td><td>{updateEnd(u)}</td><td className="num">{u.days}</td></tr>)}</tbody>
+          <tbody>{updates.list.map(u => <tr key={u.name}><th scope="row">{u.name}</th><td>{u.start}</td><td>{u.ongoing ? 'rolling out' : updateEnd(u)}</td><td className="num">{u.ongoing ? `${u.days}+` : u.days}</td></tr>)}</tbody>
         </table></div>
+
+        <h2 id="sources">Data sources</h2>
+        <ul>
+          <li><b>Google ranking updates</b>: Google Search Status Dashboard, <code>{UPDATES_FEED}</code>, read live; built-in copy checked {UPDATES_CHECKED}.</li>
+          <li><b>Real public export</b> (the &ldquo;lets-plot.org&rdquo; site you can import from the workspace): the Search Console Performance export for lets-plot.org, 1 Jan to 18 Dec 2024, published in <a href="https://github.com/JetBrains/lets-plot-docs/tree/master/data/lp2024/original/lpd_performance" rel="noreferrer">JetBrains/lets-plot-docs</a> under the MIT licence (© JetBrains). The files are bundled unchanged and go through the same importer as your own.</li>
+          <li><b>Sample sites</b> (the recipe blog and the SaaS blog) are synthetic and labelled so.</li>
+          <li><b>Importer checks</b>: header layouts and edge cases were verified against real exports that site owners published on GitHub in English, German, French, Spanish and Italian, in normal and Compare mode, plus a raw BigQuery table, checked 2026-11-13.</li>
+        </ul>
 
         <h2 id="faq">FAQ</h2>
         <h3>Clicks dropped in Search Console but not in GA4 (or the other way round)</h3>

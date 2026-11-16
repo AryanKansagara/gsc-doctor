@@ -22,6 +22,10 @@ export default function Workspace() {
   }, [list, busy])
 
   const openSample = async (id: string) => { setBusy(id); const p = await createSampleProject(id); go(`/app/p/${p.id}`) }
+  const openPublic = async () => {
+    const p = await createBlankProject('lets-plot.org (public export)')
+    go(`/app/p/${p.id}/data?load=public`)
+  }
   const newProject = async () => {
     const name = `My site ${(list?.filter(p => !p.sampleId).length ?? 0) + 1}`
     const p = await createBlankProject(name)
@@ -63,6 +67,7 @@ export default function Workspace() {
               <button type="button" className="btn primary" onClick={newProject}>Import your data</button>
               <Link href="/docs" className="btn ghost">How to export</Link>
             </div>
+            <p className="small">No export to hand? <button type="button" className="linkish" onClick={() => void openPublic()}>Import a real public one</button>: the Search Console export of lets-plot.org for 2024, published by JetBrains under the MIT licence.</p>
             <p className="muted small">Files are parsed in your browser and stay on this device unless you sign in to sync.</p>
           </article>
         </div>
@@ -74,6 +79,7 @@ export default function Workspace() {
           <div className="samples-row">
             <span className="muted small">Samples:</span>
             {SAMPLES.map(s => <button key={s.id} type="button" className="linkish small" onClick={() => void openSample(s.id)}>{s.name}</button>)}
+            <button type="button" className="linkish small" onClick={() => void openPublic()}>lets-plot.org (real public export)</button>
           </div>
         </>
       )}

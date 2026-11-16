@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type AnchorHTMLAttributes, type ReactNode } from 'react'
+import { loadLiveUpdates, subscribeUpdates, UPDATES, updatesLive } from './engine/updates.ts'
 import { cloudConfigured, deleteAccount, deleteCloudData, exportAll, signIn, signOut, signUp, syncNow, useSync, type SyncStatus } from './sync.ts'
+
+// ---------- Google ranking updates (built-in table, refreshed from the public status feed) ----------
+
+export function useUpdates() {
+  useEffect(() => { void loadLiveUpdates() }, [])
+  const list = useSyncExternalStore(subscribeUpdates, () => UPDATES)
+  return { list, live: updatesLive }
+}
 
 // ---------- Navigation ----------
 

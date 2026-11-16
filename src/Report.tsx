@@ -1,10 +1,9 @@
 import { useEffect, useMemo } from 'react'
 import { brandMatcher, compareSnapshots, dailyTotals, diagnose, KIND_LABEL, shortUrl } from './engine/analyze.ts'
-import { UPDATES } from './engine/updates.ts'
 import { CtrScatter, Timeline } from './charts.tsx'
 import { useAnalysis, useProject, winFromUrl, winOptions } from './projectData.ts'
 import { worklistCsv } from './Tabs.tsx'
-import { download, fmtK, fmtN, fmtPct, Link, signed, SyntheticBadge } from './ui.tsx'
+import { download, fmtK, fmtN, fmtPct, Link, signed, SyntheticBadge, useUpdates } from './ui.tsx'
 
 export default function Report({ id }: { id: string }) {
   const { loading, project, ds } = useProject(id)
@@ -12,7 +11,8 @@ export default function Report({ id }: { id: string }) {
   const win = winFromUrl(opts)
   const a = useAnalysis(ds, project, win)
   useEffect(() => { if (project && a) document.title = `SEO report · ${project.name} · ${a.win.label}` }, [project?.name, a?.win.label])
-  const d = useMemo(() => a && ds && project ? diagnose(ds, a.win, a.curve, project.settings, brandMatcher(project.settings.brandTerms)) : null, [a, ds, project])
+  const updates = useUpdates()
+  const d = useMemo(() => a && ds && project ? diagnose(ds, a.win, a.curve, project.settings, brandMatcher(project.settings.brandTerms)) : null, [a, ds, project, updates.list])
   const daily = useMemo(() => ds ? dailyTotals(ds).slice(-120) : [], [ds])
 
   if (loading) return <div className="boot"><span className="spinner" /> Building the report</div>
@@ -49,7 +49,7 @@ export default function Report({ id }: { id: string }) {
       </div>
       <h2>Summary</h2>
       <ol>{summary.map((s, i) => <li key={i}>{s}</li>)}</ol>
-      {daily.length > 1 && <><h2>Clicks, last 120 days</h2><Timeline daily={daily} updates={UPDATES} height={170} /></>}
+      {daily.length > 1 && <><h2>Clicks, last 120 days</h2><Timeline daily={daily} updates={updates.list} height={170} /></>}
       <h2>Next actions</h2>
       <div className="table-wrap"><table>
         <thead><tr><th>#</th><th>Action</th><th>Why</th><th className="num">Clicks / mo</th></tr></thead>
