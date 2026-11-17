@@ -291,7 +291,7 @@ export function Footer() {
       <div className="footer-inner">
         <div className="footer-brand"><Monogram /> <strong>Search Console Doctor</strong></div>
         <nav className="footer-nav" aria-label="Footer"><Link href="/app">Sites</Link><Link href="/docs">Docs</Link><Link href="/settings">Settings</Link></nav>
-        <p>Built by Aryan Kansagara. Independent project, not affiliated with Google.</p>
+        <p>Built by Aryan Kansagara.</p>
         <p className="muted small">Sample sites are synthetic. Your Search Console exports are processed in your browser and stored on this device unless you sign in to sync.</p>
       </div>
     </footer>
