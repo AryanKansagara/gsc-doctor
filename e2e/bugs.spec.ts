@@ -48,14 +48,20 @@ test.describe('#2 redirect rules', () => {
 })
 
 test.describe('#3 windows the data does not cover', () => {
-  test.fail('a previous window that starts before the data is not compared', async ({ page }) => {
+  test('a previous window that starts before the data is not compared', async ({ page }) => {
     await newSite(page)
     await importAll(page, file('rows.csv', flatPages('2026-09-01', 40)))
     await tab(page, 'Overview')
     await expect(kpi(page, 'clicks')).toHaveText('304')
     await expect(page.locator('.kpi.clicks .delta')).toHaveCount(0)
+    await tab(page, 'Drops')
+    await expect(page.locator('.verdict')).toContainText('No comparison')
+    await expect(page.getByText('Where the clicks went')).toHaveCount(0)
+    await page.getByRole('link', { name: 'Report', exact: true }).click()
+    await expect(page.getByText('Monthly SEO report')).toBeVisible()
+    await expect(page.getByText(/on the previous period/)).toHaveCount(0)
   })
-  test.fail('ten days of data are scaled as ten days', async ({ page }) => {
+  test('ten days of data are scaled as ten days', async ({ page }) => {
     // 100 clicks x 30.44 / 10 = 304.4
     await newSite(page)
     await importAll(page, file('rows.csv', flatPages('2026-09-01', 10)))

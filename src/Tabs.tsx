@@ -307,14 +307,14 @@ function Drops({ project, ds, a }: TabProps) {
           {d.window.cur && <span className="muted small">Before {d.window.prev![0]} to {d.window.prev![1]} · after {d.window.cur[0]} to {d.window.cur[1]}</span>}
         </div>
         <div className={`verdict ${d.scope}`}>
-          <b>{d.scope === 'cluster' ? 'Page cluster' : d.scope === 'sitewide' ? 'Sitewide' : d.scope === 'mixed' ? 'Mixed' : d.scope === 'unknown' ? 'Drop' : 'No drop'}</b>
+          <b>{d.scope === 'cluster' ? 'Page cluster' : d.scope === 'sitewide' ? 'Sitewide' : d.scope === 'mixed' ? 'Mixed' : d.scope === 'unknown' ? d.total.prev.impressions ? 'Drop' : 'No comparison' : 'No drop'}</b>
           <span>{d.scopeText}</span>
         </div>
         {d.changePoint && <p className="small">Biggest step down starts <b>{fmtDate(d.changePoint.date)}</b>: 14-day average {fmtN(d.changePoint.before)} → {fmtN(d.changePoint.after)} clicks a day ({fmtPct(d.changePoint.rel)}).{' '}
           {d.updates.length ? <>Overlaps <b>{d.updates.map(u => u.name).join(', ')}</b>.</> : 'No Google ranking update was rolling out then: look at your own changes first (deploys, robots.txt, noindex, migrations, tracking).'}</p>}
         {daily.length > 1 && <Timeline daily={daily} updates={updates.list} bands={d.window.cur ? [{ from: d.window.prev![0], to: d.window.prev![1], label: 'before' }, { from: d.window.cur[0], to: d.window.cur[1], label: 'after' }] : []} height={170} />}
       </div>
-      <div className="panel">
+      {d.total.prev.impressions > 0 && <div className="panel">
         <div className="panel-head"><h2>Where the clicks went</h2><span className="muted small">{fmtN(d.total.prev.clicks)} → {fmtN(d.total.cur.clicks)} clicks ({fmtPct(d.rel, 1)})</span></div>
         <div className="parts-total">
           {(['demand', 'rank', 'ctr'] as const).map(k => <div key={k} className={`kpi ${k}`}><small>{k === 'demand' ? 'Fewer impressions (demand, visibility)' : k === 'rank' ? 'Lower positions (rank)' : 'Lower CTR at the same rank'}</small><b>{signed(d.total[k], n => fmtN(n))}</b></div>)}
@@ -330,7 +330,7 @@ function Drops({ project, ds, a }: TabProps) {
           <tbody>{rows.slice(0, 25).map(r => <tr key={r.key}><th scope="row" className="break">{dim === 'page' ? shortUrl(r.key) : r.key}</th><td className="num">{fmtN(r.prev.clicks)}</td><td className="num">{fmtN(r.cur.clicks)}</td><td className="num">{delta(r.cur.clicks, r.prev.clicks, n => fmtN(n))}</td><td className="num small">{fmtN(r.prev.position, 1)} → {fmtN(r.cur.position, 1)}</td><td><PartsBar demand={r.demand} rank={r.rank} ctr={r.ctr} scale={scale} /></td><td>{Math.abs(r.delta) >= 1 ? <span className={`cause ${r.cause}`}>{CAUSE[r.cause]}</span> : '—'}</td></tr>)}</tbody>
         </table></div></>}
         <p className="muted tiny">Query rows exclude anonymised queries, so they sum to less than the total. Search Console counts clicks; analytics tools count sessions and lose consented-out visitors, so the two never match exactly.</p>
-      </div>
+      </div>}
     </>
   )
 }
@@ -374,7 +374,7 @@ function Queries({ project, a }: TabProps) {
           <div className="panel-head"><h2>Top pages</h2><button type="button" className="btn outline sm" onClick={() => download(`${slug(project.name)}-queries.csv`, csv())}>Queries CSV</button></div>
           <div className="table-wrap"><table>
             <thead><tr><th>Page</th><th className="num">Clicks / mo</th><th className="num">Pos.</th><th className="num">Change</th></tr></thead>
-            <tbody>{a.pages.slice(0, 15).map(p => <tr key={p.page}><th scope="row" className="break">{shortUrl(p.page)}</th><td className="num">{fmtN(p.clicks)}</td><td className="num">{fmtN(p.position, 1)}</td><td className="num">{delta(p.clicks, p.prevClicks, n => fmtN(n))}</td></tr>)}</tbody>
+            <tbody>{a.pages.slice(0, 15).map(p => <tr key={p.page}><th scope="row" className="break">{shortUrl(p.page)}</th><td className="num">{fmtN(p.clicks)}</td><td className="num">{fmtN(p.position, 1)}</td><td className="num">{a.has.prevPages ? delta(p.clicks, p.prevClicks, n => fmtN(n)) : '—'}</td></tr>)}</tbody>
           </table></div>
         </div>
       </div>
