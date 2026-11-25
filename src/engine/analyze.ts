@@ -1,4 +1,5 @@
 import { ctr, DIMS, pos, type Agg, type Dim, type Fact, type Settings } from './types.ts'
+import { toCsv } from './parse.ts'
 import { addDays, updatesNear, type Update } from './updates.ts'
 
 // ---------- Windows ----------
@@ -39,13 +40,16 @@ export function windowOptions(ds: Fact[]): string[] {
 export function resolveWindow(ds: Fact[], key: string, exportDays?: number): Win {
   const b = dateBounds(ds)
   if (key === 'export' || !b) {
-    // Undated exports: the chart table (if any) tells how long the period was, then the Filters table
-    // ("Last 28 days", passed in as exportDays); Search Console defaults to 3 months.
+    // Undated exports: the length recorded with the import, then the chart days. Chart days pile up over several imports
+    // while the undated tables are replaced, so they are only a fallback. Search Console defaults to 3 months.
     const dated = ds.filter(f => f.g === '' && f.date && f.period !== 'prev')
-    const days = dated.length ? new Set(dated.map(f => f.date)).size : exportDays && exportDays > 0 ? exportDays : 90
+    const days = exportDays && exportDays > 0 ? exportDays : dated.length ? new Set(dated.map(f => f.date)).size : 90
     return { key: 'export', label: 'Imported export period', cur: null, prev: null, days }
   }
-  const roll = (n: number, label: string): Win => {
+  const roll = (want: number, label: string): Win => {
+    // With less data than that, the window is what there is: dividing 10 days of clicks by 28 would understate a month.
+    const n = Math.min(want, dayDiff(b[0], b[1]) + 1)
+    if (n < want) label = `Last ${n} day${n === 1 ? '' : 's'}`
     const cur: [string, string] = [addDays(b[1], -(n - 1)), b[1]]
     return { key, label, cur, prev: [addDays(cur[0], -n), addDays(cur[0], -1)], days: n }
   }
@@ -85,6 +89,17 @@ function add(m: Map<string, Agg>, f: Fact, dims: Dim[]) {
   a.posSum += f.position * f.impressions
 }
 
+/**
+ * Whether a table reaches back to `from`. A window that starts before the data would compare a full period with part of one.
+ * Tables with a dimension can miss their first days on a quiet site, so up to 3 are forgiven when the dataset itself goes back.
+ */
+function coversFrom(ds: Fact[], pool: Fact[], grain: string, from: string): boolean {
+  let first = ''
+  for (const f of pool) if (f.g === grain && f.date && (!first || f.date < first)) first = f.date
+  if (first <= from) return true
+  return dayDiff(from, first) <= 3 && ds.some(f => f.date && f.date <= from)
+}
+
 export function slice(ds: Fact[], dims: Dim[], w: Win, filter?: (f: Fact) => boolean): Slice {
   // A dated window reads dated rows only; the export window prefers the undated tables and falls back to dated rows.
   // Mixing them would scale a 3-month table as if it covered the 28-day window.
@@ -95,11 +110,12 @@ export function slice(ds: Fact[], dims: Dim[], w: Win, filter?: (f: Fact) => boo
   if (grain === null) return { cur, prev, grain, dated: false }
   const rows = pool.filter(f => f.g === grain && (!filter || filter(f)))
   const dated = !!w.cur && rows.some(f => f.date)
+  const comparable = dated && coversFrom(ds, pool, grain, w.prev![0])
   for (const f of rows) {
     if (dated) {
       if (!f.date) continue
       if (f.date >= w.cur![0] && f.date <= w.cur![1]) add(cur, f, dims)
-      else if (f.date >= w.prev![0] && f.date <= w.prev![1]) add(prev, f, dims)
+      else if (comparable && f.date >= w.prev![0] && f.date <= w.prev![1]) add(prev, f, dims)
     } else if (f.date && w.cur === null && f.period !== 'prev') {
       // Undated window on dated rows (e.g. the Dates table next to a UI export): use everything.
       add(cur, f, dims)
@@ -362,7 +378,35 @@ export function redirectPlan(clusters: CannibalCluster[], pageClicks: Map<string
   return out
 }
 
-export const redirectCsv = (rs: Redirect[]) => ['from,to,action,reason,queries', ...rs.map(r => [r.from, r.to, r.action, r.reason, r.queries.join('; ')].map(v => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v).join(','))].join('\n') + '\n'
+export const redirectCsv = (rs: Redirect[]) => toCsv([['from', 'to', 'action', 'reason', 'queries'], ...rs.map(r => [r.from, r.to, r.action, r.reason, r.queries.join('; ')])])
+
+export interface RedirectRules { apache: string[]; nginx: string[]; manual: { from: string; to: string; why: string }[] }
+
+/**
+ * Server rules for the 301s: each matches exactly one path. Apache's plain `Redirect` is a prefix match, so it would also
+ * catch the pages below. A path rule cannot see the host, scheme or query string, so those pairs are left to do by hand.
+ */
+export function redirectRules(rs: Redirect[]): RedirectRules {
+  const out: RedirectRules = { apache: [], nginx: [], manual: [] }
+  for (const r of rs) {
+    if (r.action !== '301') continue
+    const why = ((): string => {
+      let from: URL, to: URL, path: string
+      // The URL parser drops line breaks, so they are refused before it sees them.
+      if (/[\u0000-\u001f\u007f]/.test(r.from + r.to)) return 'contains control characters'
+      try { from = new URL(r.from); to = new URL(r.to); path = decodeURIComponent(from.pathname) } catch { return 'not a full, valid URL' }
+      if (from.search) return 'has a query string, which a path rule does not match'
+      if (from.host !== to.host) return 'is on another host'
+      if (from.pathname === to.pathname) return 'differs only by scheme'
+      if (/["\\\u0000-\u001f\u007f]/.test(path) || /%2f/i.test(from.pathname) || /[$&"\\]/.test(to.href)) return 'has characters that are not safe in a rule'
+      out.apache.push(`RedirectMatch 301 "^${path.replace(/[.*+?^${}()|[\]]/g, '\\$&')}$" "${to.href}"`)
+      out.nginx.push(`location = "${path}" { return 301 "${to.href}"; }`)
+      return ''
+    })()
+    if (why) out.manual.push({ from: r.from, to: r.to, why })
+  }
+  return out
+}
 
 // ---------- Content decay ----------
 
@@ -534,7 +578,11 @@ export function diagnose(ds: Fact[], w: Win, curve: Curve, s: Pick<Settings, 'gr
   if (brand.length) by.brand = brand
 
   let scope: Diagnosis['scope'] = 'none', scopeText = '', cluster: string | undefined
-  if (rel > -0.05) scopeText = `Clicks are ${rel >= 0 ? 'up' : 'down'} ${Math.abs(rel * 100).toFixed(1)}%: no meaningful drop in this comparison.`
+  if (w.cur && !tot.prev.size) {
+    scope = 'unknown'
+    scopeText = `The data does not cover the whole previous period (${w.prev![0]} to ${w.prev![1]}), so there is nothing to compare with.`
+  }
+  else if (rel > -0.05) scopeText = `Clicks are ${rel >= 0 ? 'up' : 'down'} ${Math.abs(rel * 100).toFixed(1)}%: no meaningful drop in this comparison.`
   else if (groups.length) {
     const loss = groups.filter(g => g.delta < 0).reduce((s2, g) => s2 - g.delta, 0)
     const worst = groups[0]
@@ -650,7 +698,7 @@ export interface Analysis {
   brand: ReturnType<typeof brandSplit>
   groups: { group: string; clicks: number; impressions: number; prevClicks: number; pages: number }[]
   pages: { page: string; clicks: number; impressions: number; position: number; prevClicks: number }[]
-  has: { queryPage: boolean; dated: boolean; pages: boolean; queries: boolean }
+  has: { prevPages: boolean; queryPage: boolean; dated: boolean; pages: boolean; queries: boolean }
 }
 
 export function analyze(ds: Fact[], winKey: string, s: Settings): Analysis {
@@ -722,7 +770,7 @@ export function analyze(ds: Fact[], winKey: string, s: Settings): Analysis {
     brand: brandSplit(ds, win, isBrand),
     groups: [...groupMap.values()].sort((a, b) => b.clicks - a.clicks),
     pages,
-    has: { queryPage: !!pickGrain(ds, ['query', 'page']), dated, pages: !!pickGrain(ds, ['page']), queries: !!pickGrain(ds, ['query']) },
+    has: { prevPages: pageSl.prev.size > 0, queryPage: !!pickGrain(ds, ['query', 'page']), dated, pages: !!pickGrain(ds, ['page']), queries: !!pickGrain(ds, ['query']) },
   }
 }
 

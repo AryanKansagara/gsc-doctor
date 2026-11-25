@@ -1,13 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { autoMap, detectKind, filterDays, filtersNote, jsonTable, mergeFacts, normPage, parseCsv, parseCtr, parseDate, parseNum, readFile, sumDuplicates, validate, type Table } from './parse.ts'
+import { autoMap, detectKind, exportLength, filterDays, filtersNote, jsonTable, mergeFacts, normPage, parseCsv, parseCount, parseCtr, parseDate, parseNum, parsePosition, readFile, sumDuplicates, validate, type Table } from './parse.ts'
 import {
   analyze, brandMatcher, cannibalClusters, cannibalisation, changePoint, checkTitle, compareSnapshots, contentDecay, decompose, diagnose,
-  dropWindow, expectedCtr, slice, fitCurve, isotonicDecreasing, pageGroup, pixelWidth, redirectPlan, resolveWindow, snapshot, suggestTitle, theilSen, windowOptions,
+  dropWindow, expectedCtr, slice, fitCurve, isotonicDecreasing, pageGroup, pixelWidth, redirectPlan, redirectRules, resolveWindow, snapshot, suggestTitle, theilSen, windowOptions,
 } from './analyze.ts'
 import { generate, SAMPLES } from './sample.ts'
 import { DEFAULT_SETTINGS, type Fact } from './types.ts'
+import { redirectCsv } from './analyze.ts'
+import { factsToCsv, toCsv } from './parse.ts'
 import { BUILT_IN, fromIncidents, mergeUpdates, updatesNear, UPDATES } from './updates.ts'
 
 const day = (n: number) => new Date(Date.UTC(2026, 0, 1) + n * 86400000).toISOString().slice(0, 10)
@@ -181,6 +183,22 @@ test('redirect plan never points two pages at each other and 301s low-traffic lo
 
 // ---------- Decay ----------
 
+test('redirect rules match one path, and pairs a path rule cannot express are left to do by hand', () => {
+  const to = 'https://a.example/blog/post/'
+  const r = (from: string, target = to) => redirectRules([{ from, to: target, action: '301', reason: '', queries: [] }])
+  assert.deepEqual(r('https://a.example/blog').apache, ['RedirectMatch 301 "^/blog$" "https://a.example/blog/post/"'])
+  assert.deepEqual(r('https://a.example/').nginx, ['location = "/" { return 301 "https://a.example/blog/post/"; }'])
+  // Servers match the decoded path; regex characters are literal.
+  assert.deepEqual(r('https://a.example/c++%20(1).html').apache, ['RedirectMatch 301 "^/c\\+\\+ \\(1\\)\\.html$" "https://a.example/blog/post/"'])
+  assert.deepEqual(r('https://a.example/b; } location /x { deny all').nginx, ['location = "/b; } location /x { deny all" { return 301 "https://a.example/blog/post/"; }'])
+  for (const bad of ['http://a.example/blog/post/', 'https://www.a.example/blog/post/', 'https://www.a.example/x', 'https://a.example/p?id=2', '/blog', 'https://a.example/a"b%22', 'https://a.example/x\nDeny', 'https://a.example/%0aDeny', 'https://a.example/%E0%A4%A', 'https://a.example/a%2Fb']) {
+    const x = r(bad)
+    assert.deepEqual([x.apache, x.nginx, x.manual.length], [[], [], 1], bad)
+  }
+  assert.equal(r('https://a.example/x', 'https://a.example/y$1').manual.length, 1)
+  assert.deepEqual(redirectRules([{ from: 'https://a.example/x', to, action: 'canonical', reason: '', queries: [] }]), { apache: [], nginx: [], manual: [] })
+})
+
 test('content decay flags a steady slide and lists the queries lost', () => {
   const ds: Fact[] = []
   for (let m = 0; m < 6; m++) for (let d = 1; d <= 28; d++) {
@@ -211,6 +229,26 @@ test('page groups by path depth', () => {
   assert.equal(pageGroup('https://x.example/blog/2026/net-30/', 2), '/blog/2026/')
   assert.equal(pageGroup('https://x.example/'), '/')
   assert.equal(pageGroup('https://x.example/banana-bread/'), '/* (top level)')
+})
+
+test('windows the data does not cover: no comparison, and a short window is scaled by its own days', () => {
+  const flat = (n: number, g = 'page'): Fact[] => Array.from({ length: n }, (_, i) => ({ g, date: day(i), ...(g ? { page: 'https://a.example/p' } : {}), clicks: 10, impressions: 100, position: 3 }))
+  const run = (ds: Fact[], w = 'l28') => analyze(ds, w, DEFAULT_SETTINGS)
+  // 10 clicks a day is 304.4 a month whatever the span.
+  for (const n of [1, 10, 27, 28, 40, 55, 56, 100]) assert.ok(Math.abs(run(flat(n)).totals.cur.clicks - 304.4) < 1e-6, String(n))
+  assert.deepEqual([run(flat(10)).win.label, run(flat(10)).win.days, run(flat(1)).win.label], ['Last 10 days', 10, 'Last 1 day'])
+  for (const n of [28, 40, 55]) { const a = run(flat(n)); assert.equal(a.totals.prev, null); assert.equal(a.has.prevPages, false) }
+  assert.ok(Math.abs(run(flat(56)).totals.prev!.clicks - 304.4) < 1e-6)
+  assert.equal(run(flat(40), '2026-01').totals.prev, null)
+  assert.equal(run(flat(181), 'l3m').totals.prev, null)
+  assert.notEqual(run(flat(182), 'l3m').totals.prev, null)
+  // A page table that starts later than the daily totals is not compared, one that misses its first 3 days is.
+  const mixed = (from: number) => [...flat(80, ''), ...flat(80).slice(from)]
+  const prevPages = (from: number) => slice(mixed(from), ['page'], resolveWindow(mixed(from), 'l28')).prev.size
+  assert.deepEqual([24, 27, 28, 40].map(prevPages), [1, 1, 0, 0])
+  const d = diagnose(flat(40), resolveWindow(flat(40), 'l28'), run(flat(40)).curve, DEFAULT_SETTINGS, () => false)
+  assert.equal(d.scope, 'unknown')
+  assert.match(d.scopeText, /does not cover the whole previous period/)
 })
 
 test('title checks flag width, missing query, and the suggestion fits and leads with the query', () => {
@@ -355,6 +393,20 @@ test('compare mode: a query that vanished keeps its previous period and raises n
   assert.deepEqual(v.facts.map(f => `${f.query}:${f.period}:${f.impressions}`), ['radiance clinic:cur:677', 'radiance clinic:prev:466', 'closed comedones:prev:370', 'best skin clinic:cur:1'])
 })
 
+test('CSV exports: text cannot become a formula, numbers stay numbers, and our own CSV reads back', () => {
+  assert.equal(toCsv([['=1+1', '+1', '-1', '@x', '\tx', 'a=1', -5]]), `'=1+1,'+1,'-1,'@x,'\tx,a=1,-5\n`)
+  assert.equal(toCsv([['=HYPERLINK("x","y")']]), `"'=HYPERLINK(""x"",""y"")"\n`)
+  assert.match(redirectCsv([{ from: '=a', to: 'https://a.example/', action: '301', reason: 'r, s', queries: ['@q'] }]), /\n'=a,https:\/\/a.example\/,301,"r, s",'@q\n$/)
+  for (const q of ['=1+1', '+app', '-minus', '@handle', "'quoted", "'90s", 'plain, "x"']) {
+    const t = parseCsv(factsToCsv([{ g: 'query', date: '2026-10-01', query: q, clicks: 1, impressions: 10, position: 3 }]))
+    const map = autoMap(t.rows[0])
+    for (const d of ['page', 'country', 'device'] as const) delete map[d]
+    assert.equal(validate(t, map).facts[0].query, q)
+  }
+  // Someone else's file keeps its text as it is.
+  assert.equal(load(`Top queries,Clicks,Impressions,CTR,Position\n'=x,1,10,10%,3\n`, 'Queries.csv').v.facts[0].query, "'=x")
+})
+
 test('jump-link rows are added to their page instead of replacing it (lets-plot.org excerpt)', () => {
   const { v } = load('Top pages,Clicks,Impressions,CTR,Position\nhttps://lets-plot.org/python/index.html,246,17436,1.41%,13.6\nhttps://lets-plot.org/python/index.html#python-index-user-guide,0,1043,0%,3.32\nhttps://lets-plot.org/python/index.html#user-guide,0,65,0%,4.08\n', 'Pages.csv')
   assert.equal(v.facts.length, 1)
@@ -367,6 +419,22 @@ test('jump-link rows are added to their page instead of replacing it (lets-plot.
   assert.deepEqual(api.map(f => [f.clicks, f.impressions, f.position]), [[5, 400, 5]])
 })
 
+test('numbers are read by field: counts are whole, positions are decimals', () => {
+  for (const [s, n] of [['1.234', 1234], ['1.234.567', 1234567], ['1,234', 1234], ['1,234,567', 1234567], ['1 234', 1234], ["1'234", 1234], ['1’234', 1234], ['12', 12], ['12.0', 12], ['0', 0]] as const) assert.equal(parseCount(s), n, s)
+  assert.equal(parseCount('5.000', true), 5)
+  for (const [s, n] of [['7,125', 7.125], ['7.125', 7.125], ['11,75', 11.75], ['3', 3], ['1,234.5', 1234.5]] as const) assert.equal(parsePosition(s), n, s)
+  assert.equal(parseNum('0,125'), 0.125)
+  for (const s of ['', '-', 'many', '1.2.3', '1.23.456']) { assert.ok(Number.isNaN(parseCount(s)), s); assert.ok(Number.isNaN(parsePosition(s)), s) }
+  // 1,234 / 45,678 = 2.7%, as the file says.
+  const de = load('Die häufigsten Seiten;Klicks;Impressionen;CTR;Position\nhttps://a.example/;1.234;45.678;2,7%;7,125\n', 'Seiten.csv').v
+  assert.deepEqual([de.facts[0].clicks, de.facts[0].impressions, de.facts[0].position], [1234, 45678, 7.125])
+  assert.deepEqual(de.issues.map(i => i.level), ['warning'])
+  // A table that shows dot decimals elsewhere keeps "5.000" as 5; a real fraction of a click is refused.
+  const us = load('page,clicks,impressions,position\nhttps://a.example/,5.000,1234.000,3\nhttps://a.example/b,2.500,100.000,3\n', 'rows.csv').v
+  assert.deepEqual([us.facts[0].clicks, us.facts[0].impressions, us.facts.length], [5, 1234, 1])
+  assert.match(us.issues[0].message, /Clicks "2.500" is not a whole number/)
+})
+
 test('raw BigQuery searchdata_url_impression: zero-based sum_position, anonymised and non-web rows', () => {
   const head = 'data_date,site_url,url,query,is_anonymized_query,is_anonymized_discover,country,search_type,device,impressions,clicks,sum_position'
   const { kind, v } = load(head + '\n5/7/2024,https://nbastats.pro/,https://nbastats.pro/player/Larry_Bird,bird stats,FALSE,FALSE,esp,WEB,DESKTOP,4,1,10\n5/7/2024,https://nbastats.pro/,https://nbastats.pro/,,TRUE,FALSE,are,WEB,MOBILE,1,0,0\n5/8/2024,https://nbastats.pro/,https://nbastats.pro/,nba stats,FALSE,FALSE,usa,IMAGE,MOBILE,9,0,27\n', 'url.csv')
@@ -376,6 +444,23 @@ test('raw BigQuery searchdata_url_impression: zero-based sum_position, anonymise
   assert.equal(v.skipped, 0)
   assert.equal(v.issues.length, 2)
   assert.ok(v.issues.every(i => i.level === 'warning'))
+})
+
+test('raw BigQuery: rows that share a key are parts of one total', () => {
+  const head = 'data_date,url,query,country,search_type,device,is_video,impressions,clicks,sum_position\n'
+  const row = (video: string, imp: number, clicks: number, sum: number, q = 'shoes') => `2026-10-01,https://a.example/,${q},usa,WEB,MOBILE,${video},${imp},${clicks},${sum}\n`
+  const { v } = load(head + row('false', 100, 10, 200) + row('true', 40, 5, 40) + row('true', 40, 5, 40), 'url.csv')
+  // 20 clicks, 180 impressions, position (200 + 40 + 40) / 180 + 1
+  assert.equal(v.facts.length, 1)
+  assert.deepEqual([v.facts[0].clicks, v.facts[0].impressions], [20, 180])
+  assert.ok(Math.abs(v.facts[0].position - (280 / 180 + 1)) < 1e-9)
+  assert.deepEqual(v.issues.map(i => i.message), ['2 rows with the same key were added up.'])
+  // Importing the same file again replaces the total.
+  assert.deepEqual(mergeFacts(v.facts, v.facts), v.facts)
+  // A zero-impression part changes nothing, and other tables still warn about duplicates.
+  assert.equal(load(head + row('false', 100, 10, 200) + row('true', 0, 0, 0), 'url.csv').v.facts[0].clicks, 10)
+  const dup = load('date,query,clicks,impressions,position\n2026-10-01,shoes,1,10,3\n2026-10-01,shoes,2,20,3\n', 'rows.csv').v
+  assert.match(dup.issues[0].message, /later row wins/)
 })
 
 test('Search Analytics API JSON: unnamed keys are recognised by their values', () => {
@@ -427,6 +512,21 @@ test('a standard export is analysed as its own period, not rescaled to a 28-day 
   assert.ok(Math.abs(a.totals.cur.clicks - 800 * perMonth) < 1e-6)
   assert.ok(Math.abs(a.points.reduce((s2, p) => s2 + p.clicks, 0) - 390 * perMonth) < 1e-6)
   assert.ok(Math.abs(a.pages.reduce((s2, p) => s2 + p.clicks, 0) - 800 * perMonth) < 1e-6)
+})
+
+test('export length belongs to one export, not to every chart ever imported', () => {
+  const chart = (from: number, n: number) => parseCsv('Date,Clicks,Impressions,CTR,Position\n' + Array.from({ length: n }, (_, i) => `${day(from + i)},10,100,10%,3`).join('\n'), 'Chart.csv')
+  const pages = (n: number) => parseCsv(`Top pages,Clicks,Impressions,CTR,Position\nhttps://a.example/,${n * 10},${n * 100},10%,3`, 'Pages.csv')
+  const filters = parseCsv('Filter,Value\nDate,Last 28 days', 'Filters.csv')
+  assert.equal(exportLength([pages(31), chart(0, 31), filters]), 31)
+  assert.equal(exportLength([pages(28), filters]), 28)
+  assert.equal(exportLength([pages(28)]), null)
+  assert.equal(exportLength([]), null)
+  const ds = mergeFacts(facts([chart(0, 31), pages(31)]), facts([chart(31, 28), pages(28)]))
+  const a = analyze(ds, 'export', { ...DEFAULT_SETTINGS, exportDays: 28 })
+  assert.equal(a.win.days, 28)
+  // 280 clicks x 30.44 / 28 = 304.4
+  assert.ok(Math.abs(a.pages[0].clicks - 304.4) < 1e-6)
 })
 
 test('compare export without a chart takes its length from exportDays', () => {
