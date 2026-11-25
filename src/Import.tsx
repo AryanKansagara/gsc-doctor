@@ -5,7 +5,7 @@ import type { Fact, Settings } from './engine/types.ts'
 import { createBlankProject } from './projectData.ts'
 import { deleteProject, getProject, putData, readData, reason, restoreData, saveProject, uuid, type Project } from './store.ts'
 import { RAW_SYNC_LIMIT, useSync } from './sync.ts'
-import { ask, download, go, Link, toast } from './ui.tsx'
+import { ask, download, go, Link, NumberField, toast } from './ui.tsx'
 
 export const PUBLIC_EXPORT = { url: '/samples/lets-plot-org-2024.zip', file: 'lets-plot.org-Performance-on-Search-2024-12-18.zip', label: 'lets-plot.org, Jan to Dec 2024' }
 
@@ -150,10 +150,10 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
           <input defaultValue={project.settings.brandTerms.join(', ')} placeholder="acme, acme corp, acmee" onBlur={e => setS({ brandTerms: e.target.value.split(',').map(x => x.trim()).filter(Boolean) })} />
         </label>
         <div className="inline-fields">
-          <label className="field"><span>Page group depth</span><input type="number" min="1" max="4" value={project.settings.groupDepth} onChange={e => setS({ groupDepth: Math.min(4, Math.max(1, Number(e.target.value) || 1)) })} /></label>
-          <label className="field"><span>Decay lookback (months)</span><input type="number" min="3" max="16" value={project.settings.decayMonths} onChange={e => setS({ decayMonths: Math.min(16, Math.max(3, Number(e.target.value) || 6)) })} /></label>
-          <label className="field"><span>Min impressions / month</span><input type="number" min="0" value={project.settings.minImpressions} onChange={e => setS({ minImpressions: Math.max(0, Number(e.target.value) || 0) })} /></label>
-          {needsDays && <label className="field"><span>Export period (days)</span><input type="number" min="1" max="500" value={project.settings.exportDays ?? 90} onChange={e => setS({ exportDays: Math.min(500, Math.max(1, Math.round(Number(e.target.value)) || 90)) })} /></label>}
+          <NumberField label="Page group depth" value={project.settings.groupDepth} min={1} max={4} onSave={n => setS({ groupDepth: n })} />
+          <NumberField label="Decay lookback (months)" value={project.settings.decayMonths} min={3} max={16} onSave={n => setS({ decayMonths: n })} />
+          <NumberField label="Min impressions / month" value={project.settings.minImpressions} min={0} max={Infinity} onSave={n => setS({ minImpressions: n })} />
+          {needsDays && <NumberField label="Export period (days)" value={project.settings.exportDays ?? 90} min={1} max={500} onSave={n => setS({ exportDays: n })} />}
         </div>
         {needsDays && <p className="muted small" style={{ marginBottom: 0 }}>This export has no daily chart, so its length comes from its Filters table (or 90 days if that is missing). Monthly figures scale from it: set 28 for a &ldquo;Last 28 days&rdquo; export.</p>}
       </div>

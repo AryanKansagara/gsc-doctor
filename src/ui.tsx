@@ -315,3 +315,19 @@ export function Empty({ title, children, icon }: { title: string; children?: Rea
 }
 
 export const SyntheticBadge = () => <span className="badge synthetic" title="Generated data, not a real site">Synthetic</span>
+
+/** A whole-number field. Values in range are saved as they are typed; anything else is corrected when the field is left. */
+export function NumberField({ label, value, min, max, onSave }: { label: string; value: number; min: number; max: number; onSave(n: number): void }) {
+  const [draft, setDraft] = useState<string | null>(null)
+  // Saving is asynchronous, so the last value sent counts, not the one rendered.
+  const sent = useRef(value)
+  useEffect(() => { sent.current = value }, [value])
+  const save = (n: number) => { if (n !== sent.current) { sent.current = n; onSave(n) } }
+  return (
+    <label className="field"><span>{label}</span>
+      <input type="number" min={min} max={Number.isFinite(max) ? max : undefined} value={draft ?? value}
+        onChange={e => { const s = e.target.value, n = Number(s); setDraft(s); if (s !== '' && Number.isInteger(n) && n >= min && n <= max) save(n) }}
+        onBlur={() => { if (draft !== null && draft !== '' && Number.isFinite(Number(draft))) save(Math.min(max, Math.max(min, Math.round(Number(draft))))); setDraft(null) }} />
+    </label>
+  )
+}
