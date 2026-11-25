@@ -63,6 +63,25 @@ test('dates, CTRs and URLs normalise', () => {
   assert.equal(normPage('https://A.Example/Recipe/#jump'), 'https://a.example/Recipe/')
 })
 
+test('a file that ends inside a quote says so, with the line', () => {
+  const H = 'Top queries,Clicks,Impressions,CTR,Position\n'
+  const run = (body: string) => { const t = parseCsv(H + body); return { t, v: validate(t, autoMap(t.rows[0])) } }
+  const { v } = run('a,10,100,10%,3\n"b,5,50,10%,3\nc,9,90,10%,2\nd,9,90,10%,2\n')
+  assert.deepEqual([v.facts.length, v.total, v.skipped], [1, 2, 1])
+  assert.deepEqual(v.issues.map(i => [i.line, i.level]), [[3, 'error']])
+  assert.match(v.issues[0].message, /quote opened on line 3 never closes/)
+  // The row is not kept even when its numbers come before the quote.
+  const late = validate(parseCsv('query,clicks,impressions,position,note\na,1,10,3,\nb,1,10,3,"x\nc,1,10,3,\n'), { query: 0, clicks: 1, impressions: 2, position: 3 })
+  assert.deepEqual([late.facts.map(f => f.query), late.issues[0].line], [['a'], 3])
+  // The row can start before the quote.
+  assert.equal(run('a,10,100,10%,3\n"two\nlines","5,50').v.issues[0].line, 4)
+  assert.equal(run('a,10,100,10%,3\n"').v.issues.length, 1)
+  assert.equal(parseCsv('"Top queries,Clicks\na,1\n').unclosed, 1)
+  for (const ok of ['a,10,100,10%,3', '"a ""b""",10,100,10%,3\n', '"a\nb",10,100,10%,"3"', 'a "b,10,100,10%,3\n']) { const x = run(ok); assert.deepEqual([x.t.unclosed, x.v.facts.length, x.v.skipped], [undefined, 1, 0], ok) }
+  // A chart that was cut off does not say how long the export is.
+  assert.equal(exportLength([parseCsv('Date,Clicks,Impressions,CTR,Position\n2026-01-01,1,10,10%,3\n"2026-01-02,1', 'Chart.csv'), parseCsv('Filter,Value\nDate,Last 28 days', 'Filters.csv')]), 28)
+})
+
 test('only known date layouts are read, and a column of slashed dates has one order', () => {
   for (const bad of ['Week 12', 'unknown 5', 'Total 2026', 'Nov 2026', 'Q3 Oct 2026', '5 2026', '2026-10-01 to 2026-10-07', '2026-10-011', '2026-02-30', 'Oct 32, 2026', 'Foo 1, 2026', 'Octopus 1, 2026', 'Oct 1, 26', 'Oct 1 2026 total', '13/13/2026', '07.11.2026', '1/2/26', 'Infinity', '']) assert.equal(parseDate(bad), '', bad)
   for (const ok of ['2026-11-07', '2026/11/7', '20261107', '46333', '11/7/2026', '11/07/2026 13:45', '11/7/2026 12:00 AM', '2026-11-07T23:30:00-05:00', '2026-11-07 00:00:00 UTC', 'Nov 7, 2026', 'November 7 2026', 'NOV. 7, 2026, 12:00:00 AM', '7 Nov 2026', '07-Nov-2026', '07/Nov/2026', '7Nov2026', 'Nov 7,2026', '2026-11-07Z', '7 november 2026', 'Saturday, November 7, 2026', 'Sat, 07 Nov 2026 23:00:00 GMT', 'Sat Nov 07 2026 00:00:00 GMT+0100 (CET)', '2026-Nov-07']) assert.equal(parseDate(ok), '2026-11-07', ok)

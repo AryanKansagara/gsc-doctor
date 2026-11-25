@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { addDays } from './engine/updates.ts'
-import { autoMap, detectKind, factsToCsv, exportLength, FIELDS, filtersNote, sumDuplicates, KIND_LABEL, mergeFacts, readFile, validate, type Mapping, type Table, type TableKind } from './engine/parse.ts'
+import { autoMap, detectKind, factsToCsv, exportLength, FIELDS, filtersNote, sumDuplicates, unclosedQuote, KIND_LABEL, mergeFacts, readFile, validate, type Mapping, type Table, type TableKind } from './engine/parse.ts'
 import type { Fact, Settings } from './engine/types.ts'
 import { createBlankProject } from './projectData.ts'
 import { deleteProject, getProject, putData, readData, reason, restoreData, saveProject, uuid, type Project } from './store.ts'
@@ -49,13 +49,13 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
         if (single) loose.push(...tables)
         const days = single ? null : exportLength(tables)
         for (const t of tables) {
-          if (t.rows.length < 2) continue
+          if (t.rows.length < 2) { if (t.unclosed !== undefined) toast(`${f.name}: ${unclosedQuote(t.unclosed)}`, { tone: 'error', ttl: 10000 }); continue }
           const map = autoMap(t.rows[0])
           const id = uuid()
           if (single) looseIds.add(id)
           next.push({ id, file: single ? f.name : `${f.name} › ${t.name}`, table: t, map, kind: detectKind(t, map), days })
         }
-        if (!tables.some(t => t.rows.length > 1)) toast(`${f.name} has no data rows.`, { tone: 'error' })
+        if (!tables.some(t => t.rows.length > 1 || t.unclosed !== undefined)) toast(`${f.name} has no data rows.`, { tone: 'error' })
       } catch (e) { toast(`${f.name}: ${e instanceof Error ? e.message : 'could not be read'}`, { tone: 'error' }) }
     }
     const looseDays = exportLength(loose)

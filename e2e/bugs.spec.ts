@@ -232,11 +232,18 @@ test.fail('#13 a flat site shows no change in February', async ({ page }) => {
   await expect(page.locator('.kpi.clicks .delta')).toHaveText('0')
 })
 
-test.fail('#14 an unclosed quote is reported as such', async ({ page }) => {
+test('#14 an unclosed quote is reported as such', async ({ page }) => {
   await newSite(page)
   await drop(page, file('Queries.csv', `Top queries,${HEAD}\na,10,100,10%,3\n"b,5,50,10%,3\nc,9,90,10%,2\nd,9,90,10%,2\n`))
   await expect(page.getByText(/rows ready/)).toBeVisible()
   await expect(page.getByText(/quote/i)).toBeVisible()
+  await expect(page.getByRole('log')).toContainText('quote opened on line 3 never closes')
+})
+
+test('#14 an unclosed quote in the header row is reported as such', async ({ page }) => {
+  await newSite(page)
+  await drop(page, file('Queries.csv', `"Top queries,${HEAD}\na,10,100,10%,3\n`))
+  await expect(page.locator('.toast.error')).toContainText('quote opened on line 1 never closes')
 })
 
 test.describe('#15 failed saves', () => {

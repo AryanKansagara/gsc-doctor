@@ -2,7 +2,8 @@ import { DIMS, type Dim, type Fact } from './types.ts'
 
 // ---------- CSV ----------
 
-export interface Table { name: string; rows: string[][]; lines: number[] }
+/** `unclosed` is the line of a quote that never closes: the last row starts there or just before it and runs to the end of the file. */
+export interface Table { name: string; rows: string[][]; lines: number[]; unclosed?: number }
 
 export function parseCsv(text: string, name = 'data.csv'): Table {
   if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
@@ -14,6 +15,7 @@ export function parseCsv(text: string, name = 'data.csv'): Table {
   let quoted = false
   let line = 1
   let rowLine = 1
+  let quoteLine = 1
   for (let i = 0; i < text.length; i++) {
     const c = text[i]
     if (quoted) {
@@ -25,7 +27,7 @@ export function parseCsv(text: string, name = 'data.csv'): Table {
       }
       continue
     }
-    if (c === '"' && field === '') quoted = true
+    if (c === '"' && field === '') { quoted = true; quoteLine = line }
     else if (c === delim) { row.push(field); field = '' }
     else if (c === '\n' || c === '\r') {
       if (c === '\r' && text[i + 1] === '\n') i++
@@ -36,14 +38,16 @@ export function parseCsv(text: string, name = 'data.csv'): Table {
       rowLine = line
     } else field += c
   }
-  if (field !== '' || row.length) {
+  if (field !== '' || row.length || quoted) {
     row.push(field)
-    if (row.length > 1 || row[0] !== '') { rows.push(row); lines.push(rowLine) }
+    if (quoted || row.length > 1 || row[0] !== '') { rows.push(row); lines.push(rowLine) }
   }
   // Google Analytics exports start with a block of "# ..." comment lines before the header.
   while (rows.length && rows[0][0].trimStart().startsWith('#')) { rows.shift(); lines.shift() }
-  return { name, rows, lines }
+  return quoted ? { name, rows, lines, unclosed: quoteLine } : { name, rows, lines }
 }
+
+export const unclosedQuote = (line: number) => `The quote opened on line ${line} never closes, so nothing from there to the end of the file was read. The file may be cut off.`
 
 function sniffDelimiter(text: string): string {
   const nl = text.indexOf('\n')
@@ -374,7 +378,7 @@ export function filterDays(tables: Table[]): number | null {
 /** Length in days of one export: the days in its own chart table, else what its Filters table says. Null when neither tells. */
 export function exportLength(tables: Table[]): number | null {
   for (const t of tables) {
-    if (t.rows.length < 2) continue
+    if (t.rows.length < 2 || t.unclosed !== undefined) continue
     const map = autoMap(t.rows[0])
     if (detectKind(t, map) !== 'dates') continue
     const n = new Set(validate(t, map).facts.map(f => f.date)).size
@@ -421,6 +425,7 @@ export function validate(t: Table, map: Mapping): Validation {
   for (let r = 1; r < t.rows.length; r++) {
     const row = t.rows[r], line = t.lines[r] ?? r + 1
     const err = (m: string) => { issues.push({ line, level: 'error', message: m }); skipped++ }
+    if (t.unclosed !== undefined && r === t.rows.length - 1) { issues.push({ line: t.unclosed, level: 'error', message: unclosedQuote(t.unclosed) }); skipped++; continue }
     if (typeCol >= 0 && (row[typeCol] ?? '').trim() && !/^web$/i.test(row[typeCol].trim())) { otherType++; continue }
     if (anonCol >= 0 && map.query !== undefined && !(row[map.query] ?? '').trim() && /^true$/i.test((row[anonCol] ?? '').trim())) { anon++; continue }
     const base: Partial<Fact> = { g }
