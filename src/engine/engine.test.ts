@@ -359,9 +359,36 @@ test('snapshots compare: resolved and new actions, click change', () => {
   const a = snapshot(analyze(ds, '2026-05', set), 'a', '2026-05', 'May')
   const b = snapshot(analyze(ds, '2026-10', set), 'b', '2026-10', 'Oct')
   const c = compareSnapshots(a, b)
-  assert.equal(c.resolved.length + c.open.length, a.actions.length)
-  assert.equal(c.added.length + c.open.length, b.actions.length)
+  assert.equal(c.resolved!.length + c.open.length, a.actions.length)
+  assert.equal(c.added!.length + c.open.length, b.actions.length)
   assert.ok(Math.abs(c.clicks - (b.totals.clicks - a.totals.clicks)) < 1e-9)
+})
+
+test('snapshots compare: moves cover both lists, and what a cut-off list leaves out is unknown', () => {
+  const base = analyze(generate('ledgerly'), 'l28', DEFAULT_SETTINGS)
+  const make = (id: string, pages: [string, number][], actions: string[]) => snapshot({ ...base, pages: pages.map(([page, clicks]) => ({ page, clicks, impressions: 1, position: 1, prevClicks: 0 })), actions: actions.map(x => ({ ...base.actions[0], id: x, title: x })) }, id, id, id)
+  const many = (n: number, f = (i: number) => 1000 - i) => Array.from({ length: n }, (_, i) => [`p${i}`, f(i)] as [string, number])
+  const ids = (n: number, p = 'x') => Array.from({ length: n }, (_, i) => p + i)
+  // 500 -> 0, 290 -> 300, an action that slips from rank 40 to 41.
+  const a = make('a', [['gone', 500], ...many(30, i => 400 - i), ['up', 290]], ids(45))
+  const b = make('b', [...many(30, i => 400 - i), ['up', 300]], [...ids(39), 'other', 'x39', ...ids(45).slice(40)])
+  const c = compareSnapshots(a, b)
+  assert.deepEqual(c.movers[0], { page: 'gone', before: 500, after: 0 })
+  assert.deepEqual(c.movers[1], { page: 'up', before: 290, after: 300 })
+  assert.deepEqual([c.resolved!.length, c.added!.map(x => x.id), c.open.length], [0, ['other'], 45])
+  // Older snapshots kept the top 25 pages and 40 actions.
+  const old = (s: typeof a) => { const { pageCount: _, ...rest } = s; return { ...rest, pages: s.pages.slice(0, 25), actions: s.actions.slice(0, 40) } }
+  const o = compareSnapshots(old(a), old(b))
+  assert.deepEqual([o.resolved, o.added], [null, null])
+  assert.deepEqual(o.movers[0], { page: 'gone', before: 500, after: null })
+  assert.ok(o.movers.every(m => m.before !== 0 && m.after !== 0))
+  assert.deepEqual(compareSnapshots(old(make('a', [['p', 9]], ['x'])), make('b', [['q', 4]], [])).movers, [{ page: 'p', before: 9, after: 0 }, { page: 'q', before: 0, after: 4 }])
+  // A snapshot without page rows says nothing about pages.
+  assert.deepEqual(compareSnapshots(make('a', [], []), make('b', [['p', 9]], [])).movers, [])
+  // More than is kept.
+  const big = compareSnapshots(make('a', many(1200, i => 2000 - i), ids(600)), make('b', many(1200, i => 3000 - i), ids(600, 'y')))
+  assert.deepEqual([big.resolved, big.added], [null, null])
+  assert.ok(big.movers.every(m => m.after! - m.before! === 1000))
 })
 
 test('an undated UI export (queries + pages tables) still produces a worklist without cannibalisation', () => {

@@ -63,7 +63,7 @@ export default function Report({ id }: { id: string }) {
       {cmp && <><h2>Since last snapshot ({snaps[snaps.length - 2].label} → {snaps[snaps.length - 1].label})</h2>
         <ul>
           <li>Clicks per month {signed(cmp.clicks, n => fmtN(n))} ({fmtPct(cmp.clicksRel, 1)})</li>
-          <li>{cmp.resolved.length} actions resolved, {cmp.added.length} new, {cmp.open.length} still open</li>
+          <li>{cmp.resolved ? `${cmp.resolved.length} actions resolved, ` : ''}{cmp.added ? `${cmp.added.length} new, ` : ''}{cmp.open.length} still open{cmp.resolved && cmp.added ? '' : ' (the older or newer snapshot does not hold every action, so the rest is unknown)'}</li>
         </ul>
       </>}
       <h2>Top pages</h2>

@@ -433,14 +433,14 @@ function History({ project, update }: TabProps) {
             <div className="kpi position"><small>Position</small><b>{signed(c.position, n => fmtN(n, 1))}</b></div>
           </div>
           <div className="grid-3">
-            <div><h3 className="small strong good-text">Resolved ({c.resolved.length})</h3><ul className="small plain">{c.resolved.slice(0, 10).map(x => <li key={x.id}>{x.title}</li>)}</ul></div>
+            <div><h3 className="small strong good-text">Resolved ({c.resolved?.length ?? 'unknown'})</h3>{c.resolved ? <ul className="small plain">{c.resolved.slice(0, 10).map(x => <li key={x.id}>{x.title}</li>)}</ul> : <p className="muted small">{B.label} does not hold every action, so one that is not in it may still be open.</p>}</div>
             <div><h3 className="small strong">Still open ({c.open.length})</h3><ul className="small plain">{c.open.slice(0, 10).map(x => <li key={x.id}>{x.title}</li>)}</ul></div>
-            <div><h3 className="small strong warn-text">New ({c.added.length})</h3><ul className="small plain">{c.added.slice(0, 10).map(x => <li key={x.id}>{x.title}</li>)}</ul></div>
+            <div><h3 className="small strong warn-text">New ({c.added?.length ?? 'unknown'})</h3>{c.added ? <ul className="small plain">{c.added.slice(0, 10).map(x => <li key={x.id}>{x.title}</li>)}</ul> : <p className="muted small">{A.label} does not hold every action, so one that is not in it may have been open already.</p>}</div>
           </div>
           <h3 className="small strong" style={{ marginTop: 16 }}>Biggest page moves</h3>
           <div className="table-wrap"><table>
             <thead><tr><th>Page</th><th className="num">{A.label}</th><th className="num">{B.label}</th><th className="num">Change</th></tr></thead>
-            <tbody>{c.movers.map(m => <tr key={m.page}><th scope="row" className="break">{shortUrl(m.page)}</th><td className="num">{fmtN(m.before)}</td><td className="num">{fmtN(m.after)}</td><td className="num">{delta(m.after, m.before, n => fmtN(n))}</td></tr>)}</tbody>
+            <tbody>{c.movers.map(m => <tr key={m.page}><th scope="row" className="break">{shortUrl(m.page)}</th><td className="num">{m.before === null ? 'not listed' : fmtN(m.before)}</td><td className="num">{m.after === null ? 'not listed' : fmtN(m.after)}</td><td className="num">{m.before === null || m.after === null ? 'unknown' : delta(m.after, m.before, n => fmtN(n))}</td></tr>)}</tbody>
           </table></div>
         </> : <p className="muted">Pick two different snapshots.</p>}
       </div>}
