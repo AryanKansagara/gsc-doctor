@@ -157,7 +157,16 @@ test.fail('#10 decay is not declared clean without dated page rows', async ({ pa
   await expect(page.getByText('No decaying pages')).toHaveCount(0)
 })
 
-test.fail('#11 a chart with other dates does not zero the totals', async ({ page }) => {
+test('#11 page rows that end before the chart are not decay', async ({ page }) => {
+  await newSite(page)
+  await importMore(page, file('rows.csv', flatPages('2026-01-01', 250)))
+  await importMore(page, file('export.zip', zip({ ...standardExport(), 'Chart.csv': `Date,${HEAD}\n` + days('2026-08-10', 91).map(d => `${d},10,200,5%,5.29`).join('\n') })))
+  await tab(page, 'Worklist')
+  await expect(page.locator('.empty h3')).toBeVisible()
+  await expect(page.getByText('Refresh /p')).toHaveCount(0)
+})
+
+test('#11 a chart with other dates does not zero the totals', async ({ page }) => {
   await newSite(page)
   await importMore(page, file('rows.csv', flatPages('2026-09-01', 60)))
   await importMore(page, file('Chart.csv', `Date,${HEAD}\n` + days(day('2026-09-01', -40), 30).map(d => `${d},10,100,10%,3`).join('\n')))

@@ -251,6 +251,38 @@ test('windows the data does not cover: no comparison, and a short window is scal
   assert.match(d.scopeText, /does not cover the whole previous period/)
 })
 
+test('imports that cover different dates: windows follow the page and query tables, and a table is only used for dates it covers', () => {
+  const page = 'https://a.example/p'
+  const rows = (g: string, from: string, to: string, clicks = 10): Fact[] => {
+    const out: Fact[] = []
+    for (let t = Date.parse(from); t <= Date.parse(to); t += 86400000) out.push({ g, date: new Date(t).toISOString().slice(0, 10), ...(g.includes('page') ? { page } : {}), ...(g.includes('query') ? { query: 'q' } : {}), clicks, impressions: 100, position: 3 })
+    return out
+  }
+  const near = (a: number, b: number) => assert.ok(Math.abs(a - b) < 1e-6, `${a} is not ${b}`)
+  const run = (ds: Fact[], w = windowOptions(ds)[0]) => analyze(ds, w, DEFAULT_SETTINGS)
+  // Flat page rows that end before the chart does: nothing decayed.
+  const early = [...rows('page', '2026-01-01', '2026-09-07'), ...rows('', '2026-08-10', '2026-11-08'), { g: 'page', period: 'cur', page, clicks: 900, impressions: 9000, position: 3 } as Fact]
+  assert.deepEqual(run(early).actions, [])
+  assert.deepEqual(run(early).win.cur, ['2026-08-11', '2026-09-07'])
+  assert.deepEqual(windowOptions(early).slice(0, 3), ['l28', 'l3m', '2026-08'])
+  near(run(early).totals.cur.clicks, 304.4)
+  // A chart that ends before the page rows start is not the total of a month it does not hold.
+  const late = [...rows('page', '2026-09-01', '2026-10-30'), ...rows('', '2026-07-23', '2026-08-21')]
+  near(run(late).totals.cur.clicks, 304.4)
+  near(run(late).pages[0].clicks, 304.4)
+  assert.deepEqual(windowOptions(late).filter(w => /^\d/.test(w)), ['2026-09'])
+  // Two page tables: the one that holds the window is read, and decay needs one that holds every month.
+  const two = [...rows('page', '2026-01-01', '2026-06-30'), ...rows('query|page', '2026-03-01', '2026-10-31', 4)]
+  near(run(two, '2026-05').pages[0].clicks, 10 * 31 * 30.44 / 31)
+  near(run(two, '2026-10').pages[0].clicks, 4 * 31 * 30.44 / 31)
+  assert.deepEqual(run(two, '2026-10').decay, [])
+  // A handful of newer query rows does not shrink the window to their days.
+  assert.equal(run([...rows('page', '2026-01-01', '2026-10-31'), ...rows('query|page', '2026-11-01', '2026-11-03')]).win.days, 28)
+  // Undated page rows next to dated query + page rows do not hide the decay.
+  const fall = ['2026-05', '2026-06', '2026-07', '2026-08', '2026-09', '2026-10'].flatMap((m, i) => rows('query|page', `${m}-01`, `${m}-28`, 60 - i * 10))
+  assert.equal(run([...fall, ...rows('query|page', '2026-10-29', '2026-10-31', 10), { g: 'page', period: 'cur', page, clicks: 9, impressions: 90, position: 3 }]).decay.length, 1)
+})
+
 test('title checks flag width, missing query, and the suggestion fits and leads with the query', () => {
   const bad = checkTitle('Cookies', 'chocolate chip cookies recipe')
   assert.ok(bad.some(c => c.level === 'bad' && /Missing/.test(c.message)))

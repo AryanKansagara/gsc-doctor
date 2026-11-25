@@ -18,27 +18,69 @@ export function dateBounds(ds: Fact[]): [string, string] | null {
   return lo ? [lo, hi] : null
 }
 
+type Span = [first: string, last: string]
+
+/** First and last date of every dated table, by grain. */
+function tableSpans(ds: Fact[]): Map<string, Span> {
+  const m = new Map<string, Span>()
+  for (const f of ds) {
+    if (!f.date) continue
+    const s = m.get(f.g)
+    if (!s) m.set(f.g, [f.date, f.date])
+    else { if (f.date < s[0]) s[0] = f.date; if (f.date > s[1]) s[1] = f.date }
+  }
+  return m
+}
+
+/**
+ * Whether a table holds the whole of a date range. Tables with a dimension can miss their first or last days on a quiet
+ * site, so up to 3 at either end are forgiven when some other table has those dates.
+ */
+function covers(spans: Map<string, Span>, g: string, from: string, to: string): boolean {
+  const s = spans.get(g)
+  if (!s) return false
+  const all = [...spans.values()]
+  return (s[0] <= from || (dayDiff(from, s[0]) <= 3 && all.some(x => x[0] <= from)))
+    && (s[1] >= to || (dayDiff(s[1], to) <= 3 && all.some(x => x[1] >= to)))
+}
+
+/** The dated tables that windows follow: those with pages or queries; without any, every dated table. */
+function windowTables(spans: Map<string, Span>): string[] {
+  const all = [...spans.keys()]
+  const main = all.filter(g => grainDims(g).some(d => d === 'page' || d === 'query'))
+  return main.length ? main : all
+}
+
+/** Rolling windows end with the table that reaches furthest; of those within 3 days of each other, the longest one. */
+function windowSpan(spans: Map<string, Span>): Span | null {
+  const t = windowTables(spans).map(g => spans.get(g)!)
+  const end = t.reduce((e, s) => s[1] > e ? s[1] : e, '')
+  return t.filter(s => dayDiff(s[1], end) <= 3).sort((a, b) => dayDiff(b[0], b[1]) - dayDiff(a[0], a[1]))[0] ?? null
+}
+
 /** Window choices: rolling 28 days / 3 months, each complete calendar month, or the undated export as-is. */
 export function windowOptions(ds: Fact[]): string[] {
   // Rolling and monthly windows need dated rows with a dimension (API, Sheets, BigQuery). The standard export has
   // dated site totals only (the chart) next to undated tables, so there the export period is the one honest window.
   const undated = ds.some(f => !f.date)
   const datedDims = ds.some(f => f.date && f.g !== '')
-  const b = datedDims || !undated ? dateBounds(ds) : null
+  const spans = tableSpans(ds)
+  const b = datedDims || !undated ? windowSpan(spans) : null
   const out: string[] = []
   if (b) {
     out.push('l28')
     if (dayDiff(b[0], b[1]) >= 90) out.push('l3m')
-    let m = b[1].slice(0, 7)
-    if (monthEnd(m) > b[1]) m = prevMonth(m)
-    while (`${m}-01` >= b[0]) { out.push(m); m = prevMonth(m) }
+    const tables = windowTables(spans)
+    const first = tables.reduce((x, g) => spans.get(g)![0] < x ? spans.get(g)![0] : x, b[0])
+    const last = tables.reduce((x, g) => spans.get(g)![1] > x ? spans.get(g)![1] : x, b[1])
+    for (let m = last.slice(0, 7); m >= first.slice(0, 7); m = prevMonth(m)) if (tables.some(g => covers(spans, g, `${m}-01`, monthEnd(m)))) out.push(m)
   }
   if (undated) out.push('export')
   return out.length ? out : ['export']
 }
 
 export function resolveWindow(ds: Fact[], key: string, exportDays?: number): Win {
-  const b = dateBounds(ds)
+  const b = windowSpan(tableSpans(ds))
   if (key === 'export' || !b) {
     // Undated exports: the length recorded with the import, then the chart days. Chart days pile up over several imports
     // while the undated tables are replaced, so they are only a fallback. Search Console defaults to 3 months.
@@ -69,8 +111,10 @@ const GRAIN_PREF = ['', 'device', 'country', 'page', 'query']
 const grainDims = (g: string) => g ? g.split('|') as Dim[] : []
 
 /** Picks the coarsest grain that has every requested dimension. */
-export function pickGrain(ds: Fact[], dims: Dim[]): string | null {
-  const grains = [...new Set(ds.map(f => f.g))].filter(g => dims.every(d => grainDims(g).includes(d)))
+export const pickGrain = (ds: Fact[], dims: Dim[]): string | null => coarsest([...new Set(ds.map(f => f.g))], dims)
+
+function coarsest(all: string[], dims: Dim[]): string | null {
+  const grains = all.filter(g => dims.every(d => grainDims(g).includes(d)))
   if (!grains.length) return null
   const rank = (g: string) => grainDims(g).length * 10 + (GRAIN_PREF.includes(g) ? GRAIN_PREF.indexOf(g) : 9)
   return grains.sort((a, b) => rank(a) - rank(b))[0]
@@ -89,28 +133,19 @@ function add(m: Map<string, Agg>, f: Fact, dims: Dim[]) {
   a.posSum += f.position * f.impressions
 }
 
-/**
- * Whether a table reaches back to `from`. A window that starts before the data would compare a full period with part of one.
- * Tables with a dimension can miss their first days on a quiet site, so up to 3 are forgiven when the dataset itself goes back.
- */
-function coversFrom(ds: Fact[], pool: Fact[], grain: string, from: string): boolean {
-  let first = ''
-  for (const f of pool) if (f.g === grain && f.date && (!first || f.date < first)) first = f.date
-  if (first <= from) return true
-  return dayDiff(from, first) <= 3 && ds.some(f => f.date && f.date <= from)
-}
-
 export function slice(ds: Fact[], dims: Dim[], w: Win, filter?: (f: Fact) => boolean): Slice {
   // A dated window reads dated rows only; the export window prefers the undated tables and falls back to dated rows.
   // Mixing them would scale a 3-month table as if it covered the 28-day window.
   let pool = ds.filter(f => w.cur ? !!f.date : !f.date)
-  let grain = pickGrain(pool, dims)
+  const spans = tableSpans(pool)
+  // A table is only used for dates it covers: elsewhere its missing rows would read as zero clicks.
+  let grain = w.cur ? coarsest([...spans.keys()].filter(g => covers(spans, g, w.cur![0], w.cur![1])), dims) : pickGrain(pool, dims)
   if (grain === null && !w.cur) { pool = ds.filter(f => !!f.date); grain = pickGrain(pool, dims) }
   const cur = new Map<string, Agg>(), prev = new Map<string, Agg>()
   if (grain === null) return { cur, prev, grain, dated: false }
   const rows = pool.filter(f => f.g === grain && (!filter || filter(f)))
   const dated = !!w.cur && rows.some(f => f.date)
-  const comparable = dated && coversFrom(ds, pool, grain, w.prev![0])
+  const comparable = dated && covers(spans, grain, w.prev![0], w.prev![1])
   for (const f of rows) {
     if (dated) {
       if (!f.date) continue
@@ -230,10 +265,9 @@ export interface QueryPoint { query: string; page?: string; clicks: number; impr
 
 /** One point per query (its top page attached when the data has query + page). Monthly-normalised gap = clicks lost to a low CTR. */
 export function queryPoints(ds: Fact[], w: Win, curve: Curve | null, isBrand: (q: string) => boolean): QueryPoint[] {
-  const qp = pickGrain(ds, ['query', 'page'])
   const perMonth = 30.44 / w.days
   const top = new Map<string, { page: string; imp: number; n: number }>()
-  if (qp) for (const a of slice(ds, ['query', 'page'], w).cur.values()) {
+  for (const a of slice(ds, ['query', 'page'], w).cur.values()) {
     const t = top.get(a.dims.query!)
     if (!t) top.set(a.dims.query!, { page: a.dims.page!, imp: a.impressions, n: 1 })
     else { t.n++; if (a.impressions > t.imp) { t.page = a.dims.page!; t.imp = a.impressions } }
@@ -247,14 +281,14 @@ export function queryPoints(ds: Fact[], w: Win, curve: Curve | null, isBrand: (q
 
 /** The site's curve, fitted on up to 6 months ending with the window (one bad month or one drop cannot flatten it). Brand queries excluded. */
 export function siteCurve(ds: Fact[], w: Win, isBrand: (q: string) => boolean, months = 6): Curve {
-  const fitWin: Win = w.cur ? { ...w, cur: [addDays(w.cur[1], -Math.round(months * 30.44) + 1), w.cur[1]], prev: ['0000-00-00', '0000-00-00'] } : w
+  const from = w.cur ? addDays(w.cur[1], -Math.round(months * 30.44) + 1) : ''
   // One point per query per month, so a query that moved from position 3 to 9 counts as two points, not one at 6.
   const m = new Map<string, { pos: number; clicks: number; imp: number }>()
-  const sl = slice(ds, ['query'], fitWin)
+  const sl = slice(ds, ['query'], w)
   const grain = sl.grain
   if (!sl.dated) for (const a of sl.cur.values()) m.set(a.key, { pos: pos(a), clicks: a.clicks, imp: a.impressions })
   else for (const f of ds) {
-    if (f.g !== grain || !f.date || f.date < fitWin.cur![0] || f.date > fitWin.cur![1] || isBrand(f.query!)) continue
+    if (f.g !== grain || !f.date || f.date < from || f.date > w.cur![1] || isBrand(f.query!)) continue
     const k = f.query + '\u0001' + f.date.slice(0, 7)
     const r = m.get(k) ?? { pos: 0, clicks: 0, imp: 0 }
     r.pos += f.position * f.impressions; r.clicks += f.clicks; r.imp += f.impressions
@@ -294,10 +328,9 @@ const weekOf = (iso: string) => { const t = Date.parse(iso + 'T00:00:00Z'); cons
  * Score 0-100 = 60% how evenly impressions are split (normalised 1 - HHI) + 40% weekly flip rate of the leading page.
  */
 export function cannibalisation(ds: Fact[], w: Win, curve: Curve, opts: { minImp: number; isBrand: (q: string) => boolean; lookbackDays?: number }): Cannibal[] {
-  const grain = pickGrain(ds, ['query', 'page'])
-  if (!grain) return []
+  const { grain, cur } = slice(ds, ['query', 'page'], w)
+  if (grain === null) return []
   const perMonth = 30.44 / w.days
-  const cur = slice(ds, ['query', 'page'], w).cur
   const byQuery = new Map<string, Agg[]>()
   for (const a of cur.values()) { const l = byQuery.get(a.dims.query!) ?? []; l.push(a); byQuery.set(a.dims.query!, l) }
   // Weekly leader per query over the lookback window (default 12 weeks), for flip-flops.
@@ -414,13 +447,14 @@ export interface Decay { page: string; months: string[]; series: number[]; slope
 
 /** Monthly clicks per page over the last N complete months; flags pages whose Theil–Sen trend lost 25%+ of their baseline. */
 export function contentDecay(ds: Fact[], endMonth: string, months: number, minLoss = 20): Decay[] {
-  const grain = pickGrain(ds, ['page'])
-  if (!grain) return []
   const ms: string[] = [endMonth]
   while (ms.length < months) ms.unshift(prevMonth(ms[0]))
   const idx = new Map(ms.map((m, i) => [m, i]))
-  const b = dateBounds(ds.filter(f => f.g === grain))
-  if (!b || b[0] > `${ms[0]}-07`) return []
+  // Only a table that holds every month is read: a month it does not reach would count as zero clicks.
+  const spans = tableSpans(ds)
+  const whole = [...spans.keys()].filter(g => { const [lo, hi] = spans.get(g)!; return lo <= `${ms[0]}-07` && dayDiff(hi, monthEnd(endMonth)) <= 3 })
+  const grain = coarsest(whole, ['page'])
+  if (grain === null) return []
   const series = new Map<string, number[]>()
   for (const f of ds) {
     if (f.g !== grain || !f.date) continue
@@ -443,7 +477,7 @@ export function contentDecay(ds: Fact[], endMonth: string, months: number, minLo
     out.push({ page, months: ms, series: s, slope, change, baseline, last, pattern, gain: 0.5 * (baseline - last), lost: [] })
   }
   // Queries lost: per page, query clicks in the first half vs the last month.
-  const qp = pickGrain(ds, ['query', 'page'])
+  const qp = coarsest(whole, ['query', 'page'])
   if (qp && out.length) {
     const want = new Set(out.map(d => d.page))
     const firstHalf = new Set(ms.slice(0, Math.max(1, Math.floor(ms.length / 2))))
@@ -770,7 +804,7 @@ export function analyze(ds: Fact[], winKey: string, s: Settings): Analysis {
     brand: brandSplit(ds, win, isBrand),
     groups: [...groupMap.values()].sort((a, b) => b.clicks - a.clicks),
     pages,
-    has: { prevPages: pageSl.prev.size > 0, queryPage: !!pickGrain(ds, ['query', 'page']), dated, pages: !!pickGrain(ds, ['page']), queries: !!pickGrain(ds, ['query']) },
+    has: { prevPages: pageSl.prev.size > 0, queryPage: slice(ds, ['query', 'page'], win).grain !== null, dated, pages: pageSl.grain !== null, queries: slice(ds, ['query'], win).grain !== null },
   }
 }
 

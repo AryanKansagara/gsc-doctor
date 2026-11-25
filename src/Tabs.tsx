@@ -30,6 +30,9 @@ const delta = (cur: number, prev: number | undefined, f: (n: number) => string, 
   return <span className={`delta ${Math.abs(d) < 1e-9 ? '' : good ? 'up' : 'down'}`}>{signed(d, f)}</span>
 }
 
+/** Nothing found because nothing was looked at is not "all clear". */
+const NoQueries = ({ a }: { a: Analysis }) => a.has.queries ? null : <div className="banner warn"><span><strong>No query rows cover this date range.</strong> CTR gaps and striking distance were not checked. Choose another range or import query rows for these dates.</span></div>
+
 const slug = (s: string) => s.replace(/\W+/g, '-').toLowerCase().replace(/^-|-$/g, '')
 
 // ---------- Overview ----------
@@ -59,7 +62,7 @@ function Overview({ project, ds, a, win }: TabProps) {
     <>
       {project.sampleId && <div className="banner"><span><strong>Synthetic site.</strong> Generated rows with known problems, so you can see what each section finds. <Link href={`/app/p/${project.id}/data`}>Import your own export</Link> to start a real site.</span></div>}
       <Kpis a={a} />
-      {!a.has.queryPage && <div className="banner warn"><span><strong>No query + page rows yet.</strong> The Performance export has queries and pages in separate tables, so cannibalisation and per-page CTR fixes are limited. <Link href="/docs#query-page">Get query + page rows</Link> (free, about 5 minutes).</span></div>}
+      {!a.has.queryPage && <div className="banner warn"><span><strong>No query + page rows for this date range.</strong> The Performance export has queries and pages in separate tables, so cannibalisation and per-page CTR fixes are limited. <Link href="/docs#query-page">Get query + page rows</Link> (free, about 5 minutes).</span></div>}
       {daily.length > 1 && <div className="panel">
         <div className="panel-head"><h2>Clicks over time</h2><span className="muted small">7-day average · Google updates {updates.live ? 'live from the Search Status Dashboard' : `checked ${UPDATES_CHECKED}`}</span></div>
         <Timeline daily={daily} updates={updates.list} bands={a.win.cur ? [{ from: a.win.cur[0], to: a.win.cur[1], label: 'current' }] : []} />
@@ -171,6 +174,7 @@ function Worklist({ project, a, update }: TabProps) {
   const counts = (k: ActionKind) => a.actions.filter(x => x.kind === k).length
   return (
     <>
+      <NoQueries a={a} />
       <div className="panel">
         <div className="row between wrap gap">
           <div className="seg-control" role="radiogroup" aria-label="Action type">
@@ -346,6 +350,7 @@ function Queries({ project, a }: TabProps) {
     ...a.points.sort((x, y) => y.gap - x.gap).map(p => [p.query, p.page ?? '', Math.round(p.clicks), Math.round(p.impressions), p.ctr.toFixed(4), p.expected.toFixed(4), p.position.toFixed(1), Math.round(p.gap), p.branded ? 'yes' : ''])])
   return (
     <>
+      <NoQueries a={a} />
       <div className="grid-2">
         <div className="panel">
           <div className="panel-head"><h2>Striking distance</h2><span className="muted small">Positions 8 to 20</span></div>
