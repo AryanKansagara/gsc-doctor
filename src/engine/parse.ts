@@ -318,6 +318,18 @@ export function filterDays(tables: Table[]): number | null {
   return null
 }
 
+/** Length in days of one export: the days in its own chart table, else what its Filters table says. Null when neither tells. */
+export function exportLength(tables: Table[]): number | null {
+  for (const t of tables) {
+    if (t.rows.length < 2) continue
+    const map = autoMap(t.rows[0])
+    if (detectKind(t, map) !== 'dates') continue
+    const n = new Set(validate(t, map).facts.map(f => f.date)).size
+    if (n) return n
+  }
+  return filterDays(tables)
+}
+
 // ---------- Validation ----------
 
 export interface Issue { line: number; level: 'error' | 'warning'; message: string }

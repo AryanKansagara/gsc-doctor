@@ -39,10 +39,10 @@ export function windowOptions(ds: Fact[]): string[] {
 export function resolveWindow(ds: Fact[], key: string, exportDays?: number): Win {
   const b = dateBounds(ds)
   if (key === 'export' || !b) {
-    // Undated exports: the chart table (if any) tells how long the period was, then the Filters table
-    // ("Last 28 days", passed in as exportDays); Search Console defaults to 3 months.
+    // Undated exports: the length recorded with the import, then the chart days. Chart days pile up over several imports
+    // while the undated tables are replaced, so they are only a fallback. Search Console defaults to 3 months.
     const dated = ds.filter(f => f.g === '' && f.date && f.period !== 'prev')
-    const days = dated.length ? new Set(dated.map(f => f.date)).size : exportDays && exportDays > 0 ? exportDays : 90
+    const days = exportDays && exportDays > 0 ? exportDays : dated.length ? new Set(dated.map(f => f.date)).size : 90
     return { key: 'export', label: 'Imported export period', cur: null, prev: null, days }
   }
   const roll = (want: number, label: string): Win => {

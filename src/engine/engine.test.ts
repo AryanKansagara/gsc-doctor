@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { autoMap, detectKind, filterDays, filtersNote, jsonTable, mergeFacts, normPage, parseCsv, parseCtr, parseDate, parseNum, readFile, sumDuplicates, validate, type Table } from './parse.ts'
+import { autoMap, detectKind, exportLength, filterDays, filtersNote, jsonTable, mergeFacts, normPage, parseCsv, parseCtr, parseDate, parseNum, readFile, sumDuplicates, validate, type Table } from './parse.ts'
 import {
   analyze, brandMatcher, cannibalClusters, cannibalisation, changePoint, checkTitle, compareSnapshots, contentDecay, decompose, diagnose,
   dropWindow, expectedCtr, slice, fitCurve, isotonicDecreasing, pageGroup, pixelWidth, redirectPlan, resolveWindow, snapshot, suggestTitle, theilSen, windowOptions,
@@ -447,6 +447,21 @@ test('a standard export is analysed as its own period, not rescaled to a 28-day 
   assert.ok(Math.abs(a.totals.cur.clicks - 800 * perMonth) < 1e-6)
   assert.ok(Math.abs(a.points.reduce((s2, p) => s2 + p.clicks, 0) - 390 * perMonth) < 1e-6)
   assert.ok(Math.abs(a.pages.reduce((s2, p) => s2 + p.clicks, 0) - 800 * perMonth) < 1e-6)
+})
+
+test('export length belongs to one export, not to every chart ever imported', () => {
+  const chart = (from: number, n: number) => parseCsv('Date,Clicks,Impressions,CTR,Position\n' + Array.from({ length: n }, (_, i) => `${day(from + i)},10,100,10%,3`).join('\n'), 'Chart.csv')
+  const pages = (n: number) => parseCsv(`Top pages,Clicks,Impressions,CTR,Position\nhttps://a.example/,${n * 10},${n * 100},10%,3`, 'Pages.csv')
+  const filters = parseCsv('Filter,Value\nDate,Last 28 days', 'Filters.csv')
+  assert.equal(exportLength([pages(31), chart(0, 31), filters]), 31)
+  assert.equal(exportLength([pages(28), filters]), 28)
+  assert.equal(exportLength([pages(28)]), null)
+  assert.equal(exportLength([]), null)
+  const ds = mergeFacts(facts([chart(0, 31), pages(31)]), facts([chart(31, 28), pages(28)]))
+  const a = analyze(ds, 'export', { ...DEFAULT_SETTINGS, exportDays: 28 })
+  assert.equal(a.win.days, 28)
+  // 280 clicks x 30.44 / 28 = 304.4
+  assert.ok(Math.abs(a.pages[0].clicks - 304.4) < 1e-6)
 })
 
 test('compare export without a chart takes its length from exportDays', () => {
