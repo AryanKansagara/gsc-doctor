@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { Landing } from './Landing.tsx'
-import { Footer, Header, NotFound, Toasts } from './ui.tsx'
+import { onSaveFailure } from './store.ts'
+import { Footer, Header, NotFound, toast, Toasts } from './ui.tsx'
 
 const Workspace = lazy(() => import('./Workspace.tsx'))
 const ProjectView = lazy(() => import('./Project.tsx'))
@@ -34,6 +35,7 @@ const Loading = () => <div className="boot" role="status"><span className="spinn
 
 export function App() {
   const r = route(usePath())
+  useEffect(() => onSaveFailure(m => toast(m, { tone: 'error', ttl: 8000 })), [])
   useEffect(() => {
     const titles: Record<string, string> = { landing: 'Search Console Doctor: turn a Search Console export into an SEO worklist', docs: 'Docs: getting data out of Search Console · Search Console Doctor', settings: 'Settings · Search Console Doctor', workspace: 'Sites · Search Console Doctor', '404': 'Not found · Search Console Doctor' }
     if (titles[r.page]) document.title = titles[r.page]
