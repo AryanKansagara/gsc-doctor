@@ -3,15 +3,28 @@ import { addDays } from './engine/updates.ts'
 import { autoMap, detectKind, factsToCsv, exportLength, FIELDS, filtersNote, sumDuplicates, KIND_LABEL, mergeFacts, readFile, validate, type Mapping, type Table, type TableKind } from './engine/parse.ts'
 import type { Fact, Settings } from './engine/types.ts'
 import { createBlankProject } from './projectData.ts'
-import { putData, saveProject, uuid, type Project } from './store.ts'
+import { getProject, putData, readData, saveProject, uuid, type Project } from './store.ts'
 import { RAW_SYNC_LIMIT, useSync } from './sync.ts'
 import { ask, download, go, Link, toast } from './ui.tsx'
 
 export const PUBLIC_EXPORT = { url: '/samples/lets-plot-org-2024.zip', file: 'lets-plot.org-Performance-on-Search-2024-12-18.zip', label: 'lets-plot.org, Jan to Dec 2024' }
 
+// Every change to stored rows reads them, merges and writes back, so they run one at a time (also across tab switches).
+let queue: Promise<unknown> = Promise.resolve()
+let waiting = 0
+/** The site that queued imports into a read-only sample share. */
+let freshId: string | null = null
+function inTurn<T>(f: () => Promise<T>): Promise<T> {
+  waiting++
+  const run = queue.then(f).finally(() => { if (!--waiting) freshId = null })
+  queue = run.catch(() => {})
+  return run
+}
+
+interface Committed { p: Pending; facts: Fact[]; skipped: number; range: [string, string] | null }
 interface Pending { id: string; file: string; table: Table; map: Mapping; kind: TableKind; days: number | null }
 
-export default function DataTab({ project, ds, update }: { project: Project; ds: Fact[]; update(p: Partial<Project>): void }) {
+export default function DataTab({ project, ds, update }: { project: Project; ds: Fact[]; update(p: Partial<Project>): unknown }) {
   const [pending, setPending] = useState<Pending[]>([])
   const [note, setNote] = useState('')
   const [drag, setDrag] = useState(false)
@@ -51,18 +64,27 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
   }
 
   /** Samples are read-only: importing into one starts a new site. */
-  const target = async () => project.sampleId ? createBlankProject('My site') : project
+  const target = async () => {
+    if (!project.sampleId) return getProject(project.id) ?? project
+    const t = (freshId && getProject(freshId)) || await createBlankProject('My site')
+    freshId = t.id
+    return t
+  }
 
-  const commit = async (items: { p: Pending; facts: Fact[]; skipped: number; range: [string, string] | null }[]) => {
+  const commit = (items: Committed[]) => inTurn(() => store(items)).catch(e => toast(`Not imported: ${e instanceof Error ? e.message : 'the data could not be read'}`, { tone: 'error' }))
+
+  const store = async (items: Committed[]) => {
     const t = await target()
-    let merged = project.sampleId ? [] : ds
+    // What is stored now, not what was on screen when the button was clicked.
+    let merged = await readData(t.id) ?? []
     for (const i of items) merged = mergeFacts(merged, i.facts)
     await putData(t.id, merged)
     const metas = items.map(i => ({ id: uuid(), kind: i.p.kind, fileName: i.p.file, rows: i.facts.length, skipped: i.skipped, at: Date.now(), range: i.range }))
     // The length belongs to the export that supplied the undated tables; an earlier import's length says nothing about these.
     const undated = items.filter(i => i.facts.some(f => !f.date))
     const days = undated.at(-1)?.p.days ?? undefined
-    await saveProject({ ...t, settings: undated.length ? { ...t.settings, exportDays: days } : t.settings, imports: [...(project.sampleId ? [] : project.imports), ...metas], dataMissing: false })
+    const now = getProject(t.id) ?? t
+    await saveProject({ ...now, settings: undated.length ? { ...now.settings, exportDays: days } : now.settings, imports: [...now.imports, ...metas], dataMissing: false })
     setPending(x => x.filter(y => !items.some(i => i.p.id === y.id)))
     toast(`Imported ${items.reduce((s, i) => s + i.facts.length, 0).toLocaleString()} rows from ${items.length} table${items.length > 1 ? 's' : ''}`, { tone: 'ok' })
     if (project.sampleId) go(`/app/p/${t.id}`)
@@ -146,9 +168,8 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
             {!project.sampleId && <button type="button" className="btn sm danger-ghost" onClick={async () => {
               if (!(await ask('Clear imported data?', 'Removes every imported row from this site on this device. Settings and snapshots stay. You can undo for a few seconds.', 'Clear data'))) return
               const before = ds, imports = project.imports
-              await putData(project.id, [])
-              update({ imports: [] })
-              toast('Cleared imported data', { undo: async () => { await putData(project.id, before); update({ imports }) } })
+              await inTurn(async () => { await putData(project.id, []); await update({ imports: [] }) })
+              toast('Cleared imported data', { undo: () => void inTurn(async () => { await putData(project.id, before); await update({ imports }) }) })
             }}>Clear imported data</button>}
           </div>
         </div>
@@ -157,7 +178,7 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
   )
 }
 
-function PendingTable({ p, onChange, onCancel, onCommit }: { p: Pending; onChange(p: Pending): void; onCancel(): void; onCommit(f: Fact[], skipped: number, range: [string, string] | null): Promise<void> }) {
+function PendingTable({ p, onChange, onCancel, onCommit }: { p: Pending; onChange(p: Pending): void; onCancel(): void; onCommit(f: Fact[], skipped: number, range: [string, string] | null): Promise<unknown> }) {
   const [busy, setBusy] = useState(false)
   const usable = p.kind !== 'ignored'
   const v = useMemo(() => usable ? validate(p.table, p.map) : null, [p, usable])
@@ -231,7 +252,7 @@ async function pullRows(token: string, site: string, start: string, end: string,
   return sumDuplicates(out)
 }
 
-function LivePull({ onRows }: { onRows(f: Fact[]): Promise<void> }) {
+function LivePull({ onRows }: { onRows(f: Fact[]): Promise<unknown> }) {
   const [clientId, setClientId] = useState(() => localStorage.getItem('gsc-doctor.clientId') ?? '')
   const [token, setToken] = useState<string | null>(null)
   const [sites, setSites] = useState<string[]>([])
