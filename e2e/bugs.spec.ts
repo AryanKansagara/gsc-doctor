@@ -95,7 +95,7 @@ test('#4 tables imported one at a time keep their export\'s length, and a later 
   await expect(kpi(page, 'clicks')).toHaveText('142')
 })
 
-test.fail('#5 German counts and positions are read by field', async ({ page }) => {
+test('#5 German counts and positions are read by field', async ({ page }) => {
   // 1.234 clicks of 45.678 impressions is the 2.7% in the file. Over the default 90 days: 1,234 x 30.44 / 90 = 417.4 a month.
   await newSite(page)
   await importAll(page, file('Seiten.csv', 'Die häufigsten Seiten;Klicks;Impressionen;CTR;Position\nhttps://a.example/;1.234;45.678;2,7%;7,125\n'))
