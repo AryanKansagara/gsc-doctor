@@ -37,7 +37,7 @@ export const fmtPct = (n: number, d = 0) => Number.isFinite(n) ? `${(n * 100).to
 export const fmtDate = (iso: string) => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
 /** Compact counts: 1,234 / 12.3k / 1.2M */
 export const fmtK = (n: number) => !Number.isFinite(n) ? '—' : Math.abs(n) >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : Math.abs(n) >= 1e4 ? `${(n / 1e3).toFixed(1)}k` : fmtN(n)
-export const signed = (n: number, f: (n: number) => string) => (n > 0 ? '+' : n < 0 ? '−' : '') + f(Math.abs(n))
+export const signed = (n: number, f: (n: number) => string) => (n > 1e-9 ? '+' : n < -1e-9 ? '−' : '') + f(Math.abs(n))
 
 // ---------- Theme ----------
 

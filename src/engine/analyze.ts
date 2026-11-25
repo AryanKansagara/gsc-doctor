@@ -120,6 +120,10 @@ function coarsest(all: string[], dims: Dim[]): string | null {
   return grains.sort((a, b) => rank(a) - rank(b))[0]
 }
 
+/** Length of the previous window: months differ. */
+export const prevDays = (w: Win) => w.prev ? dayDiff(w.prev[0], w.prev[1]) + 1 : w.days
+
+/** `prev` is scaled to the length of the current window, so 31 days compare with 28 on equal terms. */
 export interface Slice { cur: Map<string, Agg>; prev: Map<string, Agg>; grain: string | null; dated: boolean }
 
 export const keyOf = (f: Partial<Record<Dim, string>>, dims: Dim[]) => dims.map(d => f[d] ?? '').join('\u0001')
@@ -156,6 +160,8 @@ export function slice(ds: Fact[], dims: Dim[], w: Win, filter?: (f: Fact) => boo
       add(cur, f, dims)
     } else if (!f.date) add(f.period === 'prev' ? prev : cur, f, dims)
   }
+  const n = prevDays(w)
+  if (dated && n !== w.days) for (const a of prev.values()) { a.clicks = a.clicks * w.days / n; a.impressions = a.impressions * w.days / n; a.posSum = a.posSum * w.days / n }
   return { cur, prev, grain, dated }
 }
 

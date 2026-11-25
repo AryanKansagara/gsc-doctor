@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import { snapshot, windowMonth, fmtMonth, type Analysis } from './engine/analyze.ts'
+import { prevDays, snapshot, windowMonth, fmtMonth, type Analysis } from './engine/analyze.ts'
 import type { Fact } from './engine/types.ts'
 import { useAnalysis, useProject, winFromUrl, winLabel, winOptions } from './projectData.ts'
 import { uuid, type Project } from './store.ts'
@@ -70,7 +70,7 @@ export default function ProjectView({ id, tab: rawTab }: { id: string; tab: stri
         <div>
           <div className="eyebrow"><Link href="/app">Sites</Link></div>
           <h1 className="row gap wrap">{project.name} {project.sampleId && <SyntheticBadge />}</h1>
-          {a && <p className="muted small" style={{ margin: 0 }}>{a.win.label}{a.win.cur ? ` · ${a.win.cur[0]} to ${a.win.cur[1]}` : ` · ${a.win.days} days`}{a.totals.prev ? ` · compared with the previous ${a.win.cur ? `${a.win.days} days` : 'period'}` : ''} · {a.actions.length} actions</p>}
+          {a && <p className="muted small" style={{ margin: 0 }}>{a.win.label}{a.win.cur ? ` · ${a.win.cur[0]} to ${a.win.cur[1]}` : ` · ${a.win.days} days`}{a.totals.prev ? ` · compared with the previous ${a.win.cur ? `${prevDays(a.win)} days` : 'period'}` : ''} · {a.actions.length} actions</p>}
         </div>
         {!empty && (
           <div className="toolbar">

@@ -331,6 +331,30 @@ test('decay tells "could not look" from "none found"', () => {
   assert.equal(state([...pages(181), ...pages(120, 181).map(f => ({ ...f, g: 'query', page: undefined, query: 'q' }))], '2026-09'), 'short')
 })
 
+test('months of different length: a flat site shows no change in any month', () => {
+  const ds: Fact[] = Array.from({ length: 366 }, (_, i) => [
+    { g: '', date: day(i), clicks: 10, impressions: 100, position: 3 },
+    { g: 'query|page', date: day(i), query: i % 2 ? 'acme' : 'shoes', page: 'https://a.example/blog/p', clicks: 10, impressions: 100, position: 3 },
+    { g: 'query|page', date: day(i), query: 'x', page: 'https://a.example/y', clicks: 10, impressions: 100, position: 3 },
+  ]).flat()
+  for (const w of windowOptions(ds)) {
+    const a = analyze(ds, w, { ...DEFAULT_SETTINGS, brandTerms: ['acme'] })
+    if (!a.totals.prev) continue
+    const same = (x: number, y: number) => assert.ok(Math.abs(x - y) < 1e-9, `${w}: ${x} is not ${y}`)
+    same(a.totals.prev.clicks, 304.4); same(a.totals.cur.clicks, 304.4); same(a.totals.prev.position, 3)
+    for (const p of a.pages) same(p.prevClicks, p.clicks)
+    for (const g of a.groups) same(g.prevClicks, g.clicks)
+    const d = diagnose(ds, a.win, a.curve, DEFAULT_SETTINGS, q => q === 'acme')
+    same(d.rel, 0); same(d.total.delta, 0); assert.equal(d.scope, 'none')
+    for (const row of d.by.page!) same(row.delta, 0)
+  }
+  // Half the traffic is still half: 310 clicks in January scaled to 28 days is 280, February has 140.
+  const half = ds.filter(f => f.g === '' && f.date! < '2026-03-01').map(f => ({ ...f, clicks: f.date! < '2026-02-01' ? 10 : 5 }))
+  const d = diagnose(half, resolveWindow(half, '2026-02'), fitCurve([]), DEFAULT_SETTINGS, () => false)
+  assert.deepEqual([d.total.prev.clicks, d.total.cur.clicks, d.rel], [280, 140, -0.5])
+  assert.ok(Math.abs(d.total.demand + d.total.rank + d.total.ctr - d.total.delta) < 1e-9)
+})
+
 test('title checks flag width, missing query, and the suggestion fits and leads with the query', () => {
   const bad = checkTitle('Cookies', 'chocolate chip cookies recipe')
   assert.ok(bad.some(c => c.level === 'bad' && /Missing/.test(c.message)))
