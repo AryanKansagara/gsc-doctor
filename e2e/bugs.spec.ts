@@ -223,13 +223,17 @@ test('#12 a page that lost everything is a page move', async ({ page }) => {
   await expect(page.locator('table').last().getByRole('row').nth(1)).toContainText('/p0/')
 })
 
-test.fail('#13 a flat site shows no change in February', async ({ page }) => {
+test('#13 a flat site shows no change in February', async ({ page }) => {
   await newSite(page)
   await importAll(page, file('rows.csv', flatPages('2026-01-01', 90)))
   await page.locator('#win').selectOption('2026-02')
   await tab(page, 'Overview')
   await expect(kpi(page, 'clicks')).toHaveText('304')
   await expect(page.locator('.kpi.clicks .delta')).toHaveText('0')
+  await tab(page, 'Drops')
+  await page.getByRole('radio', { name: 'February 2026 vs previous' }).click()
+  await expect(page.locator('.verdict b')).toHaveText('No drop')
+  await expect(page.getByText('280 → 280 clicks')).toBeVisible()
 })
 
 test('#14 an unclosed quote is reported as such', async ({ page }) => {

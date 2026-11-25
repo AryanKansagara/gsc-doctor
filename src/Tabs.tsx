@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import {
-  brandMatcher, checkTitle, compareSnapshots, dailyTotals, diagnose, dropWindow, expectedCtr, fmtMonth, KIND_LABEL, redirectCsv, redirectRules, shortUrl, suggestTitle,
+  brandMatcher, checkTitle, compareSnapshots, dailyTotals, diagnose, dropWindow, expectedCtr, fmtMonth, KIND_LABEL, prevDays, redirectCsv, redirectRules, shortUrl, suggestTitle,
   type Action, type ActionKind, type Analysis, type DropRow, type QueryPoint,
 } from './engine/analyze.ts'
 import { toCsv } from './engine/parse.ts'
@@ -93,7 +93,7 @@ function Overview({ project, ds, a, win }: TabProps) {
             <table><thead><tr><th /><th className="num">Clicks</th><th className="num">Previous</th><th className="num">Change</th></tr></thead><tbody>
               {([['Branded', b.brand], ['Non-branded', b.nonBrand]] as const).map(([l, r]) => <tr key={l}><th scope="row">{l}</th><td className="num">{fmtN(r.cur.clicks)}</td><td className="num">{fmtN(r.prev.clicks)}</td><td className="num">{r.prev.clicks ? delta(r.cur.clicks / r.prev.clicks - 1, 0, n => fmtPct(n, 0)) : '—'}</td></tr>)}
             </tbody></table>
-            <p className="muted tiny">Terms: {project.settings.brandTerms.join(', ')}. Brand queries are left out of the CTR curve; they always over-perform.</p>
+            <p className="muted tiny">{prevDays(a.win) !== a.win.days && `Previous is scaled from ${prevDays(a.win)} to ${a.win.days} days. `}Terms: {project.settings.brandTerms.join(', ')}. Brand queries are left out of the CTR curve; they always over-perform.</p>
           </> : <p className="muted small">Add your brand names (and misspellings) to split traffic people would find anyway from traffic you earned.</p>}
         </div>
       </div>
@@ -331,6 +331,7 @@ function Drops({ project, ds, a }: TabProps) {
           {(['demand', 'rank', 'ctr'] as const).map(k => <div key={k} className={`kpi ${k}`}><small>{k === 'demand' ? 'Fewer impressions (demand, visibility)' : k === 'rank' ? 'Lower positions (rank)' : 'Lower CTR at the same rank'}</small><b>{signed(d.total[k], n => fmtN(n))}</b></div>)}
         </div>
         <p className="muted tiny">The three parts add up exactly to the change. Rank is the CTR change this site&rsquo;s curve predicts from the position move; CTR is the rest (titles, rich results, AI answers, SERP features). Falling off page one also cuts impressions, so a rank problem often shows up under demand too.</p>
+        {prevDays(w) !== w.days && <p className="small">The previous period has {prevDays(w)} days and this one {w.days}, so &ldquo;before&rdquo; figures are scaled to {w.days} days.</p>}
         {!dims.length && <p className="small">No split by page, query, device or country for this comparison: those tables in a standard export are not dated, so only site totals can be compared across dates. Export in <Link href="/docs#compare">Compare mode</Link> or import <Link href="/docs#query-page">dated rows</Link> to see which pages and queries moved.</p>}
         {dims.length > 0 && <><div className="seg-control" role="radiogroup" aria-label="Split by">
           {dims.map(k => <button key={k} type="button" role="radio" aria-checked={dim === k} className={dim === k ? 'on' : ''} onClick={() => setDim(k)}>{DIM_LABEL[k]}</button>)}
