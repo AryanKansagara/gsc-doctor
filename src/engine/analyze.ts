@@ -823,7 +823,11 @@ export interface Snapshot {
   actions: { id: string; kind: ActionKind; title: string; gain: number }[]
   counts: Record<ActionKind, number>
   pages: { page: string; clicks: number }[]
+  /** Pages there were; `pages` may be cut off. Missing in older snapshots, which kept the top 25. */
+  pageCount?: number
 }
+
+const KEEP_ACTIONS = 500, KEEP_PAGES = 1000
 
 export function snapshot(a: Analysis, id: string, period: string, label: string): Snapshot {
   const counts = { ctr: 0, cannibal: 0, decay: 0, striking: 0 }
@@ -831,23 +835,35 @@ export function snapshot(a: Analysis, id: string, period: string, label: string)
   const bc = a.brand.brand.cur.clicks, all = bc + a.brand.nonBrand.cur.clicks
   return {
     id, period, label, at: Date.now(), window: a.win.key, totals: a.totals.cur, brandShare: all ? bc / all : 0,
-    actions: a.actions.slice(0, 40).map(x => ({ id: x.id, kind: x.kind, title: x.title, gain: x.gain })),
-    counts, pages: a.pages.slice(0, 25).map(p => ({ page: p.page, clicks: p.clicks })),
+    actions: a.actions.slice(0, KEEP_ACTIONS).map(x => ({ id: x.id, kind: x.kind, title: x.title, gain: x.gain })),
+    counts, pages: a.pages.slice(0, KEEP_PAGES).map(p => ({ page: p.page, clicks: p.clicks })), pageCount: a.pages.length,
   }
 }
 
+const hasEveryAction = (s: Snapshot) => s.actions.length >= Object.values(s.counts).reduce((x, n) => x + n, 0)
+const hasEveryPage = (s: Snapshot) => s.pageCount === undefined ? s.pages.length > 0 && s.pages.length < 25 : s.pageCount > 0 && s.pages.length >= s.pageCount
+
+/** `resolved` and `added` are null when the other snapshot does not hold every action; a null before or after is unknown. */
 export function compareSnapshots(a: Snapshot, b: Snapshot) {
   const ids = new Set(b.actions.map(x => x.id)), old = new Set(a.actions.map(x => x.id))
-  const pa = new Map(a.pages.map(p => [p.page, p.clicks]))
+  const side = (s: Snapshot) => {
+    const m = new Map(s.pages.map(p => [p.page, p.clicks])), full = hasEveryPage(s)
+    return { m, get: (p: string) => m.get(p) ?? (full ? 0 : null), most: s.pages.length ? Math.min(...m.values()) : Infinity }
+  }
+  const A = side(a), B = side(b)
+  // A page outside a cut-off list had at most the list's last value, so that much of its move is certain.
+  const moved = (x: number | null, y: number | null) => x !== null && y !== null ? Math.abs(y - x) : x !== null ? Math.max(0, x - B.most) : y !== null ? Math.max(0, y - A.most) : 0
   return {
     clicks: b.totals.clicks - a.totals.clicks,
     clicksRel: a.totals.clicks ? (b.totals.clicks - a.totals.clicks) / a.totals.clicks : 0,
     impressions: b.totals.impressions - a.totals.impressions,
     ctr: b.totals.ctr - a.totals.ctr,
     position: b.totals.position - a.totals.position,
-    resolved: a.actions.filter(x => !ids.has(x.id)),
-    added: b.actions.filter(x => !old.has(x.id)),
+    resolved: hasEveryAction(b) ? a.actions.filter(x => !ids.has(x.id)) : null,
+    added: hasEveryAction(a) ? b.actions.filter(x => !old.has(x.id)) : null,
     open: b.actions.filter(x => old.has(x.id)),
-    movers: b.pages.map(p => ({ page: p.page, before: pa.get(p.page) ?? 0, after: p.clicks })).sort((x, y) => Math.abs(y.after - y.before) - Math.abs(x.after - x.before)).slice(0, 10),
+    movers: [...new Set([...A.m.keys(), ...B.m.keys()])].map(page => ({ page, before: A.get(page), after: B.get(page) }))
+      .filter(m => (m.before !== null && m.after !== null) || moved(m.before, m.after) > 0)
+      .sort((x, y) => moved(y.before, y.after) - moved(x.before, x.after)).slice(0, 10),
   }
 }

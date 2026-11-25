@@ -201,7 +201,7 @@ test('#11 a chart with other dates does not zero the totals', async ({ page }) =
   await expect(kpi(page, 'clicks')).toHaveText('304')
 })
 
-test.fail('#12 a page that lost everything is a page move', async ({ page }) => {
+test('#12 a page that lost everything is a page move', async ({ page }) => {
   const rows = (d: string, top: number) => Array.from({ length: 30 }, (_, i) => `${d},https://a.example/p${i}/,${i ? 100 - i : top},1000,3`)
   await newSite(page)
   await importAll(page, file('rows.csv', 'date,page,clicks,impressions,position\n' + [...rows('2026-09-01', 500), ...rows('2026-09-30', 1), ...rows('2026-10-01', 0), ...rows('2026-10-31', 0)].join('\n')))
