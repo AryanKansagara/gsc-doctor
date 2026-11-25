@@ -296,6 +296,22 @@ test('imports that cover different dates: windows follow the page and query tabl
   assert.equal(run([...fall, ...rows('query|page', '2026-10-29', '2026-10-31', 10), { g: 'page', period: 'cur', page, clicks: 9, impressions: 90, position: 3 }]).decay.length, 1)
 })
 
+test('decay tells "could not look" from "none found"', () => {
+  const pages = (n: number, from = 0): Fact[] => Array.from({ length: n }, (_, i) => ({ g: 'page', date: day(from + i), page: 'https://a.example/p', clicks: 10, impressions: 100, position: 3 }))
+  const chart: Fact[] = Array.from({ length: 200 }, (_, i) => ({ g: '', date: day(i), clicks: 10, impressions: 100, position: 3 }))
+  const undated: Fact = { g: 'page', period: 'cur', page: 'https://a.example/p', clicks: 9, impressions: 90, position: 3 }
+  const state = (ds: Fact[], w = windowOptions(ds)[0], s = DEFAULT_SETTINGS) => analyze(ds, w, s).decayCheck.state
+  assert.equal(state([undated, ...chart]), 'no-rows')
+  assert.equal(state(chart), 'no-rows')
+  assert.equal(state([undated]), 'no-rows')
+  assert.equal(state(pages(120)), 'short')
+  assert.equal(state(pages(120), 'l28', { ...DEFAULT_SETTINGS, decayMonths: 4 }), 'ok')
+  assert.equal(state(pages(181)), 'ok')
+  assert.equal(state([...pages(181), undated], 'export'), 'no-range')
+  // Page rows that stop before the range do not count as looked at.
+  assert.equal(state([...pages(181), ...pages(120, 181).map(f => ({ ...f, g: 'query', page: undefined, query: 'q' }))], '2026-09'), 'short')
+})
+
 test('title checks flag width, missing query, and the suggestion fits and leads with the query', () => {
   const bad = checkTitle('Cookies', 'chocolate chip cookies recipe')
   assert.ok(bad.some(c => c.level === 'bad' && /Missing/.test(c.message)))
