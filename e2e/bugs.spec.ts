@@ -230,13 +230,57 @@ test.fail('#14 an unclosed quote is reported as such', async ({ page }) => {
   await expect(page.getByText(/quote/i)).toBeVisible()
 })
 
-test.fail('#15 a failed save is not reported as imported', async ({ page }) => {
-  await newSite(page)
-  await drop(page, file('Queries.csv', `Top queries,${HEAD}\na,10,100,10%,3\n`))
-  await page.evaluate(() => { IDBObjectStore.prototype.put = () => { throw new DOMException('full', 'QuotaExceededError') } })
-  await page.getByRole('button', { name: 'Import 1 rows' }).click()
-  await expect(page.locator('.toast').first()).toBeVisible()
-  expect(await page.locator('.toast').first().textContent()).not.toContain('Imported')
+test.describe('#15 failed saves', () => {
+  const q = file('Queries.csv', `Top queries,${HEAD}\na,10,100,10%,3\n`)
+  const full = (page: Page) => page.evaluate(() => { IDBObjectStore.prototype.put = () => { throw new DOMException('full', 'QuotaExceededError') } })
+  test('#15 a failed save is not reported as imported', async ({ page }) => {
+    await newSite(page)
+    await drop(page, q)
+    await full(page)
+    await page.getByRole('button', { name: 'Import 1 rows' }).click()
+    await expect(page.locator('.toast').first()).toBeVisible()
+    expect(await page.locator('.toast').first().textContent()).not.toContain('Imported')
+    await expect(page.locator('.toast.error')).toContainText('storage is full')
+    await expect(page.getByRole('button', { name: 'Import 1 rows' })).toBeEnabled()
+    await expect(page.getByText('Imported data', { exact: true })).toHaveCount(0)
+  })
+  test('#15 a transaction that aborts after its request succeeded is a failed save', async ({ page }) => {
+    await newSite(page)
+    await drop(page, q)
+    await page.evaluate(() => {
+      const put = IDBObjectStore.prototype.put
+      IDBObjectStore.prototype.put = function (v, k) { const r = k === undefined ? put.call(this, v) : put.call(this, v, k); r.addEventListener('success', () => this.transaction.abort()); return r }
+    })
+    await page.getByRole('button', { name: 'Import 1 rows' }).click()
+    await expect(page.locator('.toast.error')).toContainText('Not imported')
+    await expect(page.locator('.toast.ok')).toHaveCount(0)
+  })
+  test('#15 a failed import into a sample leaves no empty site behind', async ({ page }) => {
+    await page.goto('/app?sample=ledgerly&tab=data')
+    await drop(page, q)
+    await page.evaluate(() => { const put = IDBObjectStore.prototype.put; IDBObjectStore.prototype.put = function (v, k) { if (this.name === 'data') throw new DOMException('full', 'QuotaExceededError'); return k === undefined ? put.call(this, v) : put.call(this, v, k) } })
+    await page.getByRole('button', { name: 'Import 1 rows' }).click()
+    await expect(page.locator('.toast.error')).toContainText('Not imported')
+    await page.goto('/app')
+    await expect(page.getByRole('link', { name: /Ledgerly/ }).first()).toBeVisible()
+    await expect(page.getByRole('link', { name: 'My site' })).toHaveCount(0)
+  })
+  test('#15 settings that could not be saved are said to last for the session', async ({ page }) => {
+    await newSite(page)
+    await full(page)
+    await page.getByLabel('Page group depth').fill('3')
+    await expect(page.locator('.toast.error').first()).toContainText('lasts until this tab closes')
+    await expect(page.getByLabel('Page group depth')).toHaveValue('3')
+  })
+  test('#15 without any storage the rows are readable and said to be temporary', async ({ page }) => {
+    await page.addInitScript(() => { IDBFactory.prototype.open = () => { throw new DOMException('no', 'SecurityError') } })
+    await newSite(page)
+    await expect(page.locator('.toast.error')).toContainText('does not let the app store data')
+    await drop(page, q)
+    await page.getByRole('button', { name: 'Import 1 rows' }).click()
+    await expect(page.locator('.toast.ok')).toContainText('kept until this tab closes')
+    await expect(page.getByText(/^1 rows/)).toBeVisible()
+  })
 })
 
 test.fail('#16 sample rows can be dropped back in', async ({ page }) => {

@@ -3,7 +3,7 @@ import { addDays } from './engine/updates.ts'
 import { autoMap, detectKind, factsToCsv, exportLength, FIELDS, filtersNote, sumDuplicates, KIND_LABEL, mergeFacts, readFile, validate, type Mapping, type Table, type TableKind } from './engine/parse.ts'
 import type { Fact, Settings } from './engine/types.ts'
 import { createBlankProject } from './projectData.ts'
-import { getProject, putData, readData, saveProject, uuid, type Project } from './store.ts'
+import { deleteProject, getProject, putData, readData, reason, restoreData, saveProject, uuid, type Project } from './store.ts'
 import { RAW_SYNC_LIMIT, useSync } from './sync.ts'
 import { ask, download, go, Link, toast } from './ui.tsx'
 
@@ -71,14 +71,19 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
     return t
   }
 
-  const commit = (items: Committed[]) => inTurn(() => store(items)).catch(e => toast(`Not imported: ${e instanceof Error ? e.message : 'the data could not be read'}`, { tone: 'error' }))
+  const commit = (items: Committed[]) => inTurn(() => store(items)).catch(e => toast(`Not imported: ${reason(e)}. Nothing was changed.`, { tone: 'error', ttl: 8000 }))
 
   const store = async (items: Committed[]) => {
     const t = await target()
     // What is stored now, not what was on screen when the button was clicked.
     let merged = await readData(t.id) ?? []
     for (const i of items) merged = mergeFacts(merged, i.facts)
-    await putData(t.id, merged)
+    let kept: boolean
+    try { kept = await putData(t.id, merged) } catch (e) {
+      // The new site a sample import starts is of no use without its rows.
+      if (project.sampleId && !t.imports.length) await deleteProject(t.id)
+      throw e
+    }
     const metas = items.map(i => ({ id: uuid(), kind: i.p.kind, fileName: i.p.file, rows: i.facts.length, skipped: i.skipped, at: Date.now(), range: i.range }))
     // The length belongs to the export that supplied the undated tables; an earlier import's length says nothing about these.
     const undated = items.filter(i => i.facts.some(f => !f.date))
@@ -86,7 +91,7 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
     const now = getProject(t.id) ?? t
     await saveProject({ ...now, settings: undated.length ? { ...now.settings, exportDays: days } : now.settings, imports: [...now.imports, ...metas], dataMissing: false })
     setPending(x => x.filter(y => !items.some(i => i.p.id === y.id)))
-    toast(`Imported ${items.reduce((s, i) => s + i.facts.length, 0).toLocaleString()} rows from ${items.length} table${items.length > 1 ? 's' : ''}`, { tone: 'ok' })
+    toast(`Imported ${items.reduce((s, i) => s + i.facts.length, 0).toLocaleString()} rows from ${items.length} table${items.length > 1 ? 's' : ''}${kept ? '' : ', kept until this tab closes'}`, { tone: 'ok' })
     if (project.sampleId) go(`/app/p/${t.id}`)
   }
 
@@ -168,8 +173,8 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
             {!project.sampleId && <button type="button" className="btn sm danger-ghost" onClick={async () => {
               if (!(await ask('Clear imported data?', 'Removes every imported row from this site on this device. Settings and snapshots stay. You can undo for a few seconds.', 'Clear data'))) return
               const before = ds, imports = project.imports
-              await inTurn(async () => { await putData(project.id, []); await update({ imports: [] }) })
-              toast('Cleared imported data', { undo: () => void inTurn(async () => { await putData(project.id, before); await update({ imports }) }) })
+              try { await inTurn(async () => { await putData(project.id, []); await update({ imports: [] }) }) } catch (e) { toast(`Not cleared: ${reason(e)}.`, { tone: 'error' }); return }
+              toast('Cleared imported data', { undo: () => void inTurn(async () => { await restoreData(project.id, before); await update({ imports }) }) })
             }}>Clear imported data</button>}
           </div>
         </div>

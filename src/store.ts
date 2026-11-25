@@ -48,23 +48,52 @@ async function tx<T>(store: 'projects' | 'data', mode: IDBTransactionMode, fn: (
   const d = await db()
   if (!d) throw new Error('no-idb')
   return new Promise((res, rej) => {
-    const r = fn(d.transaction(store, mode).objectStore(store))
-    r.onsuccess = () => res(r.result)
-    r.onerror = () => rej(r.error)
+    const t = d.transaction(store, mode)
+    const r = fn(t.objectStore(store))
+    // A request can succeed and its transaction still fail (disk full), so only a completed one counts.
+    t.oncomplete = () => res(r.result)
+    t.onabort = t.onerror = () => rej(t.error ?? r.error ?? new Error('The browser stopped the write.'))
   })
 }
 
+// What could not be written is kept in `mem` for the session and read from there first.
+const failHooks = new Set<(message: string) => void>()
+/** Called with a message for the user whenever something is only kept until the tab closes. */
+export const onSaveFailure = (f: (message: string) => void) => { failHooks.add(f); return () => { failHooks.delete(f) } }
+export const reason = (e: unknown) => (e as { name?: string } | null)?.name === 'QuotaExceededError' ? 'this browser\u2019s storage is full' : 'this browser could not use its storage'
+let warned = false
+function notStored(e: unknown) {
+  if (!dbOpen) { if (warned) return; warned = true }
+  const m = dbOpen ? `Not saved: ${reason(e)}. The change lasts until this tab closes.` : 'This browser does not let the app store data. Everything here lasts until this tab closes.'
+  failHooks.forEach(f => f(m))
+}
+let dbOpen = true
+
 async function idbGetAll<T>(store: 'projects'): Promise<T[]> {
-  try { return await tx(store, 'readonly', s => s.getAll()) as T[] } catch { return [...mem[store].values()] as T[] }
+  let stored: T[] = []
+  try { stored = await tx(store, 'readonly', s => s.getAll()) as T[] } catch { /* memory only */ }
+  return [...stored.filter(v => !mem[store].has((v as { id: string }).id)), ...mem[store].values() as Iterable<T>]
 }
 async function idbGet<T>(store: 'projects' | 'data', key: string): Promise<T | undefined> {
-  try { return await tx(store, 'readonly', s => s.get(key)) as T | undefined } catch { return mem[store].get(key) as T | undefined }
+  if (mem[store].has(key)) return mem[store].get(key) as T
+  try { return await tx(store, 'readonly', s => s.get(key)) as T | undefined } catch { return undefined }
 }
+/** Writes, or throws. Without any database (private modes) it keeps the value for the session and resolves to false. */
+async function idbWrite(store: 'projects' | 'data', value: unknown, key?: string): Promise<boolean> {
+  const id = key ?? (value as { id: string }).id
+  dbOpen = !!await db()
+  if (!dbOpen) { mem[store].set(id, value); notStored(null); return false }
+  await tx(store, 'readwrite', s => key === undefined ? s.put(value) : s.put(value, key))
+  mem[store].delete(id)
+  return true
+}
+/** Writes, or keeps the value for the session and tells the user. */
 async function idbPut(store: 'projects' | 'data', value: unknown, key?: string) {
-  try { await tx(store, 'readwrite', s => key === undefined ? s.put(value) : s.put(value, key)) } catch { mem[store].set(key ?? (value as { id: string }).id, value) }
+  try { await idbWrite(store, value, key) } catch (e) { mem[store].set(key ?? (value as { id: string }).id, value); notStored(e) }
 }
 async function idbDel(store: 'projects' | 'data', key: string) {
-  try { await tx(store, 'readwrite', s => s.delete(key)) } catch { mem[store].delete(key) }
+  mem[store].delete(key)
+  try { await tx(store, 'readwrite', s => s.delete(key)) } catch (e) { if (await db()) failHooks.forEach(f => f(`Not deleted from this device: ${reason(e)}.`)) }
 }
 
 // ---------- In-memory project list with subscribers ----------
@@ -122,10 +151,13 @@ export async function deleteProject(id: string): Promise<() => Promise<void>> {
 export const getData = (id: string) => idbGet<Dataset>('data', id)
 /** Like getData, but a failed read throws: merging into "nothing" would replace what is stored. */
 export async function readData(id: string): Promise<Dataset | undefined> {
-  if (!await db()) return mem.data.get(id) as Dataset | undefined
+  if (mem.data.has(id) || !await db()) return mem.data.get(id) as Dataset | undefined
   return tx('data', 'readonly', s => s.get(id))
 }
-export const putData = (id: string, ds: Dataset) => idbPut('data', ds, id)
+/** Stores rows or throws; false when they are only kept for the session (no database at all). */
+export const putData = (id: string, ds: Dataset) => idbWrite('data', ds, id)
+/** Puts rows back after an undo: if they cannot be written they are kept for the session. */
+export const restoreData = (id: string, ds: Dataset) => idbPut('data', ds, id)
 
 export const uuid = () => crypto.randomUUID()
 
