@@ -55,9 +55,9 @@ function sniffDelimiter(text: string): string {
   return [',', '\t', ';'].map(d => [d, head.split(d).length] as const).sort((a, b) => b[1] - a[1])[0][0]
 }
 
-/** Text a spreadsheet would run as a formula gets a leading apostrophe; numbers stay numbers. */
+/** Text a spreadsheet would run as a formula gets a leading apostrophe (one more if it has some, so it can be undone); numbers stay numbers. */
 export const toCsv = (rows: (string | number)[][]) => rows.map(r => r.map(v => {
-  const s = typeof v === 'string' && /^[=+\-@\t\r\n]/.test(v) ? `'${v}` : String(v)
+  const s = typeof v === 'string' && /^'*[=+\-@\t\r\n]/.test(v) ? `'${v}` : String(v)
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }).join(',')).join('\n') + '\n'
 
@@ -390,7 +390,7 @@ export function exportLength(tables: Table[]): number | null {
 // ---------- Validation ----------
 
 export interface Issue { line: number; level: 'error' | 'warning'; message: string }
-export interface Validation { facts: Fact[]; total: number; skipped: number; issues: Issue[]; dims: Dim[]; dated: boolean; compare: boolean; range: [string, string] | null }
+export interface Validation { facts: Fact[]; total: number; skipped: number; issues: Issue[]; dims: Dim[]; dated: boolean; compare: boolean; range: [string, string] | null; /** The tables found: more than one only in our own CSV. */ grains: string[] }
 
 export function validate(t: Table, map: Mapping): Validation {
   const issues: Issue[] = []
@@ -401,11 +401,13 @@ export function validate(t: Table, map: Mapping): Validation {
   const compare = map.clicks_prev !== undefined && map.impressions_prev !== undefined
   const head = t.lines[0] ?? 1
   for (const f of ['clicks', 'impressions', 'position'] as const) if (map[f] === undefined && !(f === 'position' && map.sum_position !== undefined)) issues.push({ line: head, level: 'error', message: `No column is mapped to ${f}.` })
-  if (issues.length) return { facts, total: Math.max(0, t.rows.length - 1), skipped: Math.max(0, t.rows.length - 1), issues, dims, dated, compare, range: null }
+  if (issues.length) return { facts, total: Math.max(0, t.rows.length - 1), skipped: Math.max(0, t.rows.length - 1), issues, dims, dated, compare, range: null, grains: [] }
   // Raw BigQuery tables mix search types and carry anonymised rows with no query.
   const h = (t.rows[0] ?? []).map(fold)
   // A CSV written by factsToCsv: undo the apostrophe that toCsv puts before formula-like text.
   const ours = h.join() === NORMALISED.join()
+  const periodCol = ours ? h.indexOf('period') : -1
+  let hasDates = false
   const typeCol = h.indexOf('search_type'), anonCol = h.indexOf('is_anonymized_query')
   // Google's raw tables repeat keys (and split them by search appearance flags), so their rows are parts of one total.
   const raw = map.sum_position !== undefined && map.position === undefined
@@ -429,10 +431,12 @@ export function validate(t: Table, map: Mapping): Validation {
     if (typeCol >= 0 && (row[typeCol] ?? '').trim() && !/^web$/i.test(row[typeCol].trim())) { otherType++; continue }
     if (anonCol >= 0 && map.query !== undefined && !(row[map.query] ?? '').trim() && /^true$/i.test((row[anonCol] ?? '').trim())) { anon++; continue }
     const base: Partial<Fact> = { g }
+    const rowDims = ours ? dims.filter(d => (row[map[d]!] ?? '').trim()) : dims
+    if (ours) base.g = rowDims.join('|')
     let bad = false, frag = false
-    for (const d of dims) {
+    for (const d of rowDims) {
       let v = (row[map[d]!] ?? '').trim()
-      if (ours) v = v.replace(/^'(?=[=+\-@])/, '')
+      if (ours) v = v.replace(/^'(?='*[=+\-@])/, '')
       if (!v) { err(`Empty ${d}.`); bad = true; break }
       if (d === 'page') {
         if (!/^https?:\/\//i.test(v) && !v.startsWith('/') && !/^sc-domain:/.test(v)) issues.push({ line, level: 'warning', message: `"${v.slice(0, 60)}" does not look like a URL.` })
@@ -444,7 +448,12 @@ export function validate(t: Table, map: Mapping): Validation {
       base[d] = v
     }
     if (bad) continue
-    if (dated) {
+    // Our own CSV holds dated and undated tables side by side; an undated row says which period it is.
+    const rowPeriod = ours ? (row[periodCol] ?? '').trim() : ''
+    const rowDated = dated && !(ours && /^(cur|prev)$/.test(rowPeriod) && !(row[map.date!] ?? '').trim())
+    if (ours && !rowDated && !rowDims.length) { err('No query, page, country or device.'); continue }
+    if (rowDated) {
+      hasDates = true
       const d = order === 'mixed' && SLASHED.test((row[map.date!] ?? '').trim()) ? '' : parseDate(row[map.date!], order === 'day')
       if (!d) { err(`Unreadable date "${row[map.date!] ?? ''}". Use YYYY-MM-DD.`); continue }
       base.date = d
@@ -471,7 +480,7 @@ export function validate(t: Table, map: Mapping): Validation {
         const c2 = parseCtr(row[ctrCol])
         if (Number.isFinite(c2) && Math.abs(c2 - clicks / imp) > 0.015 && imp >= 20) issues.push({ line, level: 'warning', message: `CTR${tag} ${(c2 * 100).toFixed(1)}% does not match clicks / impressions (${(clicks / imp * 100).toFixed(1)}%). Using clicks / impressions.` })
       }
-      return { ...base, clicks, impressions: imp, position: p, ...(dated ? {} : { period: prev ? 'prev' : 'cur' }) } as Fact
+      return { ...base, clicks, impressions: imp, position: p, ...(rowDated ? {} : { period: prev || rowPeriod === 'prev' ? 'prev' : 'cur' }) } as Fact
     }
     const cur = read(false)
     if (typeof cur === 'string') { err(cur); continue }
@@ -479,11 +488,11 @@ export function validate(t: Table, map: Mapping): Validation {
     if (typeof prev === 'string') { issues.push({ line, level: 'warning', message: prev + ' Previous period ignored for this row.' }); prev = null }
     if (!cur && !prev) {
       // A day with no impressions is still a day: keep it in the daily series so period lengths and trends stay right.
-      if (dated && !dims.length) facts.push({ g, date: base.date, clicks: 0, impressions: 0, position: 0 })
+      if (rowDated && !rowDims.length) facts.push({ g: '', date: base.date, clicks: 0, impressions: 0, position: 0 })
       else zero++
       continue
     }
-    const key = [base.date, ...dims.map(d => base[d])].join('\u0001')
+    const key = [base.date ?? rowPeriod, ...dims.map(d => base[d])].join('\u0001')
     const e = seen.get(key)
     if (e && (frag || e.frag)) {
       // Search Console lists #jump-link URLs as separate rows of the same page: add them up instead of keeping one.
@@ -498,7 +507,7 @@ export function validate(t: Table, map: Mapping): Validation {
       if (e.cur) sum(e.cur, cur); else { e.cur = cur; facts.push(cur) }
       continue
     }
-    if (e) issues.push({ line, level: 'warning', message: `Duplicate row for ${dims.map(d => base[d]).join(' / ') || base.date}. The later row wins.` })
+    if (e) issues.push({ line, level: 'warning', message: `Duplicate row for ${rowDims.map(d => base[d]).join(' / ') || base.date}. The later row wins.` })
     seen.set(key, { cur, prev, frag })
     if (cur) facts.push(cur)
     if (prev) facts.push(prev)
@@ -509,7 +518,7 @@ export function validate(t: Table, map: Mapping): Validation {
   note(zero, `row${zero === 1 ? '' : 's'} with zero impressions left out.`)
   note(otherType, `row${otherType === 1 ? '' : 's'} from other search types (image, video, news, Discover) left out; only web search is analysed.`)
   note(anon, `anonymised row${anon === 1 ? '' : 's'} with no query left out. Use a page-level table for full click totals.`)
-  return { facts, total: t.rows.length - 1, skipped, issues, dims, dated, compare, range: lo ? [lo, hi] : null }
+  return { facts, total: t.rows.length - 1, skipped, issues, dims, dated: ours ? hasDates : dated, compare, range: lo ? [lo, hi] : null, grains: [...new Set(facts.map(f => f.g))] }
 }
 
 /** Adds up rows that share a key (the API returns #section URLs separately; stripping the fragment makes them collide). */

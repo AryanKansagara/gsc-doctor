@@ -303,13 +303,29 @@ test.describe('#15 failed saves', () => {
   })
 })
 
-test.fail('#16 sample rows can be dropped back in', async ({ page }) => {
+test('#16 sample rows can be dropped back in', async ({ page }) => {
   await page.goto('/app?sample=ledgerly&tab=data')
   const csv = await downloaded(page, () => page.getByRole('button', { name: 'Download 3 months of sample rows' }).click())
   await newSite(page)
   await drop(page, file('sample.csv', csv.text))
   await expect(page.getByText(/rows ready/)).toBeVisible()
   await expect(page.getByRole('button', { name: 'Import 0 rows' })).toHaveCount(0)
+  await page.getByRole('button', { name: /^Import [\d,]+ rows$/ }).click()
+  await expect(page.locator('.toast.ok')).toContainText(`Imported ${(csv.text.trim().split('\n').length - 1).toLocaleString('en-US')} rows`)
+})
+
+test('#16 a site with mixed tables exports and imports back the same', async ({ page }) => {
+  await newSite(page)
+  await importAll(page, file('export.zip', zip(standardExport())), file('rows.csv', flatPages('2026-09-01', 30)))
+  const save = () => downloaded(page, () => page.getByRole('button', { name: 'Download normalised CSV' }).click())
+  const first = await save()
+  await newSite(page)
+  await drop(page, file('back.csv', first.text))
+  await expect(page.getByText(/skipped/)).toHaveCount(0)
+  await expect(page.getByText(/Grain: 4 tables/)).toBeVisible()
+  await page.getByRole('button', { name: /^Import [\d,]+ rows$/ }).click()
+  await expect(page.locator('.toast.ok')).toContainText('Imported')
+  expect((await save()).text.split('\n').sort()).toEqual(first.text.split('\n').sort())
 })
 
 test.fail('#17 a lookback of 12 months can be typed', async ({ page }) => {
