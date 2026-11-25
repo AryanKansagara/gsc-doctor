@@ -132,7 +132,7 @@ export default function Docs() {
         <Code code={BQ_ROWS} label="BigQuery SQL · query + page" />
         <Code code={BQ_PAGES} label="BigQuery SQL · pages" />
         <Code code={BQ_SITE} label="BigQuery SQL · site, device, country" />
-        <p className="small muted">A raw export of <code>searchdata_url_impression</code> also imports as-is: <code>sum_position</code> is converted to an average position (sum ÷ impressions + 1, because Google stores it zero-based), rows of other search types (image, video, news, Discover) are left out, and anonymised rows with no query are counted and left out.</p>
+        <p className="small muted">A raw export of <code>searchdata_url_impression</code> also imports as-is: <code>sum_position</code> is converted to an average position (sum ÷ impressions + 1, because Google stores it zero-based), rows of other search types (image, video, news, Discover) are left out, and anonymised rows with no query are counted and left out, and rows that share a key are added up (Google exports them in parts).</p>
         <h3>e. API Explorer JSON</h3>
         <p>The <b>Try this API</b> panel on the <code>searchanalytics.query</code> reference page returns JSON. Save the response as a <code>.json</code> file and drop it in: the unnamed <code>keys</code> are recognised by their values (dates, URLs, device names, three-letter country codes; anything else is the query).</p>
 

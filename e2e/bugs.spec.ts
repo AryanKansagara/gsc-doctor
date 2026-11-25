@@ -104,7 +104,7 @@ test('#5 German counts and positions are read by field', async ({ page }) => {
   await expect(kpi(page, 'clicks')).toHaveText('417')
 })
 
-test.fail('#6 raw BigQuery rows that share a key are added up', async ({ page }) => {
+test('#6 raw BigQuery rows that share a key are added up', async ({ page }) => {
   // 10 + 5 clicks, 100 + 40 impressions, position (200 + 40) / 140 + 1 = 2.71.
   await newSite(page)
   await importAll(page, file('bq.csv', 'data_date,url,query,is_anonymized_query,country,search_type,device,is_video,impressions,clicks,sum_position\n2026-10-01,https://a.example/,shoes,false,usa,WEB,MOBILE,false,100,10,200\n2026-10-01,https://a.example/,shoes,false,usa,WEB,MOBILE,true,40,5,40\n'))

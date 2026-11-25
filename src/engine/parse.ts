@@ -369,6 +369,9 @@ export function validate(t: Table, map: Mapping): Validation {
   // Raw BigQuery tables mix search types and carry anonymised rows with no query.
   const h = (t.rows[0] ?? []).map(fold)
   const typeCol = h.indexOf('search_type'), anonCol = h.indexOf('is_anonymized_query')
+  // Google's raw tables repeat keys (and split them by search appearance flags), so their rows are parts of one total.
+  const raw = map.sum_position !== undefined && map.position === undefined
+  let added = 0
   const seen = new Map<string, { cur: Fact | null; prev: Fact | null; frag: boolean }>()
   const sum = (a: Fact, b: Fact) => { a.position = (a.position * a.impressions + b.position * b.impressions) / (a.impressions + b.impressions); a.clicks += b.clicks; a.impressions += b.impressions }
   const countCols = (['clicks', 'impressions', 'clicks_prev', 'impressions_prev'] as const).map(f => map[f]).filter(c => c !== undefined)
@@ -447,6 +450,11 @@ export function validate(t: Table, map: Mapping): Validation {
       if (prev) { if (e.prev) sum(e.prev, prev); else { e.prev = prev; facts.push(prev) } }
       continue
     }
+    if (e && raw && cur) {
+      added++
+      if (e.cur) sum(e.cur, cur); else { e.cur = cur; facts.push(cur) }
+      continue
+    }
     if (e) issues.push({ line, level: 'warning', message: `Duplicate row for ${dims.map(d => base[d]).join(' / ') || base.date}. The later row wins.` })
     seen.set(key, { cur, prev, frag })
     if (cur) facts.push(cur)
@@ -454,6 +462,7 @@ export function validate(t: Table, map: Mapping): Validation {
   }
   const note = (n: number, message: string) => { if (n) issues.push({ line: head, level: 'warning', message: `${n.toLocaleString('en-US')} ${message}` }) }
   note(merged, `row${merged === 1 ? '' : 's'} for #section links were added to their page.`)
+  note(added, `row${added === 1 ? '' : 's'} with the same key were added up.`)
   note(zero, `row${zero === 1 ? '' : 's'} with zero impressions left out.`)
   note(otherType, `row${otherType === 1 ? '' : 's'} from other search types (image, video, news, Discover) left out; only web search is analysed.`)
   note(anon, `anonymised row${anon === 1 ? '' : 's'} with no query left out. Use a page-level table for full click totals.`)
