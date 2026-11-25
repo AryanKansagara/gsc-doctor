@@ -190,6 +190,8 @@ function PendingTable({ p, onChange, onCancel, onCommit }: { p: Pending; onChang
   const headers = p.table.rows[0] ?? []
   if (!v) return <div className="panel slim row between"><span className="small"><b className="break">{p.file}</b> · {KIND_LABEL[p.kind]}</span><button type="button" className="btn ghost sm" onClick={onCancel}>Dismiss</button></div>
   const errors = v.issues.filter(i => i.level === 'error')
+  const grainName = (g: string) => g ? g.split('|').join(' + ') : 'site totals'
+  const grains = (v.grains.length ? v.grains : [v.dims.join('|')]).map(grainName)
   const setMap = (map: Mapping) => onChange({ ...p, map, kind: detectKind(p.table, map) })
   return (
     <div className="panel">
@@ -210,7 +212,7 @@ function PendingTable({ p, onChange, onCancel, onCommit }: { p: Pending; onChang
         <strong className="good-text">{v.facts.length.toLocaleString()} rows ready</strong> of {v.total.toLocaleString()}
         {v.skipped > 0 && <>, <strong className="error">{v.skipped} skipped</strong></>}
         {v.issues.length > errors.length && <>, {v.issues.length - errors.length} warnings</>}.
-        {' '}Grain: {v.dims.length ? v.dims.join(' + ') : 'site totals'}{v.dated ? ', by date' : ''}{v.compare ? ', with a previous period' : ''}.
+        {' '}Grain: {grains.length > 1 ? `${grains.length} tables (${grains.join(', ')})` : grains[0]}{v.dated ? ', by date' : ''}{v.compare ? ', with a previous period' : ''}.
         {v.range && <> Dates {v.range[0]} to {v.range[1]}.</>}
       </p>
       {v.issues.length > 0 && (

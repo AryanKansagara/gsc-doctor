@@ -82,6 +82,34 @@ test('a file that ends inside a quote says so, with the line', () => {
   assert.equal(exportLength([parseCsv('Date,Clicks,Impressions,CTR,Position\n2026-01-01,1,10,10%,3\n"2026-01-02,1', 'Chart.csv'), parseCsv('Filter,Value\nDate,Last 28 days', 'Filters.csv')]), 28)
 })
 
+test('the normalised CSV imports back to the same rows', () => {
+  const round = (facts: Fact[]) => { const t = parseCsv(factsToCsv(facts)); return validate(t, autoMap(t.rows[0])) }
+  const key = (f: Fact) => JSON.stringify([f.g, f.date, f.period, f.query, f.page, f.country, f.device, f.clicks, f.impressions, f.position])
+  const facts: Fact[] = [
+    { g: '', date: '2026-01-01', clicks: 12345, impressions: 1234567, position: 3.25 },
+    { g: '', date: '2026-01-02', clicks: 0, impressions: 0, position: 0 },
+    { g: 'device', date: '2026-01-01', device: 'Mobile', clicks: 1, impressions: 10, position: 3 },
+    { g: 'query|page', date: '2026-01-01', query: 'shoes, red', page: 'https://a.example/x', clicks: 1, impressions: 10, position: 3 },
+    { g: 'query|page|country|device', date: '2026-01-01', query: 'shoes', page: 'https://a.example/', country: 'USA', device: 'Desktop', clicks: 1, impressions: 10, position: 3 },
+    ...(['cur', 'prev'] as const).flatMap(period => [
+      { g: 'query', period, query: '=1+1', clicks: 2, impressions: 20, position: 1 },
+      { g: 'query', period, query: "'=1+1", clicks: 3, impressions: 20, position: 1 },
+      { g: 'query', period, query: "'quoted'", clicks: 4, impressions: 20, position: 1 },
+      { g: 'page', period, page: 'https://a.example/x', clicks: period === 'cur' ? 5 : 6, impressions: 20, position: 2.5 },
+      { g: 'country', period, country: 'United States', clicks: 5, impressions: 20, position: 2.5 },
+    ]),
+  ]
+  const v = round(facts)
+  assert.deepEqual(v.facts.map(key), facts.map(key))
+  assert.deepEqual([v.skipped, v.issues, v.dated, v.grains.length], [0, [], true, 7])
+  assert.equal(round(facts.filter(f => f.period)).dated, false)
+  const sample = generate('ledgerly').filter(f => f.date! >= '2026-10-01')
+  assert.equal(round(sample).facts.length, sample.length)
+  // A row that says neither its date nor its period, or has no dimension at all, is still refused.
+  const bad = parseCsv('date,period,query,page,country,device,clicks,impressions,ctr,position\n,,shoes,,,,1,10,0.1,3\n,cur,,,,,1,10,0.1,3\nsoon,cur,shoes,,,,1,10,0.1,3\n')
+  assert.deepEqual([validate(bad, autoMap(bad.rows[0])).facts.length, validate(bad, autoMap(bad.rows[0])).skipped], [0, 3])
+})
+
 test('only known date layouts are read, and a column of slashed dates has one order', () => {
   for (const bad of ['Week 12', 'unknown 5', 'Total 2026', 'Nov 2026', 'Q3 Oct 2026', '5 2026', '2026-10-01 to 2026-10-07', '2026-10-011', '2026-02-30', 'Oct 32, 2026', 'Foo 1, 2026', 'Octopus 1, 2026', 'Oct 1, 26', 'Oct 1 2026 total', '13/13/2026', '07.11.2026', '1/2/26', 'Infinity', '']) assert.equal(parseDate(bad), '', bad)
   for (const ok of ['2026-11-07', '2026/11/7', '20261107', '46333', '11/7/2026', '11/07/2026 13:45', '11/7/2026 12:00 AM', '2026-11-07T23:30:00-05:00', '2026-11-07 00:00:00 UTC', 'Nov 7, 2026', 'November 7 2026', 'NOV. 7, 2026, 12:00:00 AM', '7 Nov 2026', '07-Nov-2026', '07/Nov/2026', '7Nov2026', 'Nov 7,2026', '2026-11-07Z', '7 november 2026', 'Saturday, November 7, 2026', 'Sat, 07 Nov 2026 23:00:00 GMT', 'Sat Nov 07 2026 00:00:00 GMT+0100 (CET)', '2026-Nov-07']) assert.equal(parseDate(ok), '2026-11-07', ok)
