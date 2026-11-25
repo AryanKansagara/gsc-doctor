@@ -328,11 +328,25 @@ test('#16 a site with mixed tables exports and imports back the same', async ({ 
   expect((await save()).text.split('\n').sort()).toEqual(first.text.split('\n').sort())
 })
 
-test.fail('#17 a lookback of 12 months can be typed', async ({ page }) => {
+test('#17 a lookback of 12 months can be typed', async ({ page }) => {
   await newSite(page)
   const f = page.getByLabel('Decay lookback (months)')
   await f.press('ControlOrMeta+a')
   await f.pressSequentially('12')
   await f.blur()
   await expect(f).toHaveValue('12')
+})
+
+test('#17 any lookback from 3 to 16 can be typed, and others are corrected on leaving the field', async ({ page }) => {
+  for (const open of [() => newSite(page), () => page.goto('/settings')]) {
+    await open()
+    const f = page.getByLabel('Decay lookback (months)')
+    const type = async (s: string) => { await f.press('ControlOrMeta+a'); await f.press('Delete'); await f.pressSequentially(s); await f.blur() }
+    for (const [typed, kept] of [['10', '10'], ['16', '16'], ['3', '3'], ['11', '11'], ['1', '3'], ['17', '16'], ['120', '16'], ['', '16'], ['-5', '3'], ['7.4', '7']]) {
+      await type(typed)
+      await expect(f, typed).toHaveValue(kept)
+    }
+    await page.reload()
+    await expect(f).toHaveValue('7')
+  }
 })

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { Settings as S } from './engine/types.ts'
 import { deleteProject, getDefaults, getProjects, setDefaults } from './store.ts'
 import { exportAll, RAW_SYNC_LIMIT, useSync } from './sync.ts'
-import { ask, download, setTheme, toast, useDark } from './ui.tsx'
+import { ask, download, NumberField, setTheme, toast, useDark } from './ui.tsx'
 
 export default function Settings() {
   const [d, setD] = useState<S>(getDefaults)
@@ -19,9 +19,9 @@ export default function Settings() {
         <h2>Defaults for new sites</h2>
         <p className="muted small">Existing sites keep their own settings; change those on the site&rsquo;s Data &amp; settings tab.</p>
         <div className="inline-fields">
-          <label className="field"><span>Page group depth</span><input type="number" min="1" max="4" value={d.groupDepth} onChange={e => save({ groupDepth: Math.min(4, Math.max(1, Number(e.target.value) || 1)) })} /></label>
-          <label className="field"><span>Decay lookback (months)</span><input type="number" min="3" max="16" value={d.decayMonths} onChange={e => save({ decayMonths: Math.min(16, Math.max(3, Number(e.target.value) || 6)) })} /></label>
-          <label className="field"><span>Minimum impressions / month</span><input type="number" min="0" max="100000" value={d.minImpressions} onChange={e => save({ minImpressions: Math.max(0, Number(e.target.value) || 0) })} /></label>
+          <NumberField label="Page group depth" value={d.groupDepth} min={1} max={4} onSave={n => save({ groupDepth: n })} />
+          <NumberField label="Decay lookback (months)" value={d.decayMonths} min={3} max={16} onSave={n => save({ decayMonths: n })} />
+          <NumberField label="Minimum impressions / month" value={d.minImpressions} min={0} max={100000} onSave={n => save({ minImpressions: n })} />
         </div>
       </div>
 
