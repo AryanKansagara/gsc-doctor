@@ -51,8 +51,9 @@ function sniffDelimiter(text: string): string {
   return [',', '\t', ';'].map(d => [d, head.split(d).length] as const).sort((a, b) => b[1] - a[1])[0][0]
 }
 
+/** Text a spreadsheet would run as a formula gets a leading apostrophe; numbers stay numbers. */
 export const toCsv = (rows: (string | number)[][]) => rows.map(r => r.map(v => {
-  const s = String(v)
+  const s = typeof v === 'string' && /^[=+\-@\t\r\n]/.test(v) ? `'${v}` : String(v)
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }).join(',')).join('\n') + '\n'
 
@@ -368,6 +369,8 @@ export function validate(t: Table, map: Mapping): Validation {
   if (issues.length) return { facts, total: Math.max(0, t.rows.length - 1), skipped: Math.max(0, t.rows.length - 1), issues, dims, dated, compare, range: null }
   // Raw BigQuery tables mix search types and carry anonymised rows with no query.
   const h = (t.rows[0] ?? []).map(fold)
+  // A CSV written by factsToCsv: undo the apostrophe that toCsv puts before formula-like text.
+  const ours = h.join() === NORMALISED.join()
   const typeCol = h.indexOf('search_type'), anonCol = h.indexOf('is_anonymized_query')
   // Google's raw tables repeat keys (and split them by search appearance flags), so their rows are parts of one total.
   const raw = map.sum_position !== undefined && map.position === undefined
@@ -390,6 +393,7 @@ export function validate(t: Table, map: Mapping): Validation {
     let bad = false, frag = false
     for (const d of dims) {
       let v = (row[map[d]!] ?? '').trim()
+      if (ours) v = v.replace(/^'(?=[=+\-@])/, '')
       if (!v) { err(`Empty ${d}.`); bad = true; break }
       if (d === 'page') {
         if (!/^https?:\/\//i.test(v) && !v.startsWith('/') && !/^sc-domain:/.test(v)) issues.push({ line, level: 'warning', message: `"${v.slice(0, 60)}" does not look like a URL.` })
@@ -494,7 +498,9 @@ export function mergeFacts(base: Fact[], incoming: Fact[]): Fact[] {
   return [...m.values()]
 }
 
+const NORMALISED = ['date', 'period', 'query', 'page', 'country', 'device', 'clicks', 'impressions', 'ctr', 'position']
+
 export function factsToCsv(facts: Fact[]): string {
-  return toCsv([['date', 'period', 'query', 'page', 'country', 'device', 'clicks', 'impressions', 'ctr', 'position'],
+  return toCsv([NORMALISED,
     ...facts.map(f => [f.date ?? '', f.period ?? '', f.query ?? '', f.page ?? '', f.country ?? '', f.device ?? '', f.clicks, f.impressions, f.impressions ? (f.clicks / f.impressions).toFixed(4) : '0', f.position.toFixed(2)])])
 }

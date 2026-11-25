@@ -112,7 +112,7 @@ test('#6 raw BigQuery rows that share a key are added up', async ({ page }) => {
   expect(csv.text.trim().split('\n').slice(1)).toEqual(['2026-10-01,,shoes,https://a.example/,USA,Mobile,15,140,0.1071,2.71'])
 })
 
-test.fail('#7 query text cannot become a spreadsheet formula', async ({ page }) => {
+test('#7 query text cannot become a spreadsheet formula', async ({ page }) => {
   await newSite(page)
   await importAll(page, file('Queries.csv', `Top queries,${HEAD}\n"=HYPERLINK(""http://x.example"",""open"")",5,5000,0.1%,9\n`))
   await tab(page, 'Queries & pages')

@@ -8,6 +8,8 @@ import {
 } from './analyze.ts'
 import { generate, SAMPLES } from './sample.ts'
 import { DEFAULT_SETTINGS, type Fact } from './types.ts'
+import { redirectCsv } from './analyze.ts'
+import { factsToCsv, toCsv } from './parse.ts'
 import { BUILT_IN, fromIncidents, mergeUpdates, updatesNear, UPDATES } from './updates.ts'
 
 const day = (n: number) => new Date(Date.UTC(2026, 0, 1) + n * 86400000).toISOString().slice(0, 10)
@@ -373,6 +375,20 @@ test('compare mode: a query that vanished keeps its previous period and raises n
     + 'radiance clinic,37,16,677,466,5.47%,3.43%,11.76,18.9\nclosed comedones,0,0,0,370,0%,0%,0,10.98\nbest skin clinic,1,0,1,0,100%,0%,1,0\n', 'Queries.csv')
   assert.equal(v.issues.length, 0)
   assert.deepEqual(v.facts.map(f => `${f.query}:${f.period}:${f.impressions}`), ['radiance clinic:cur:677', 'radiance clinic:prev:466', 'closed comedones:prev:370', 'best skin clinic:cur:1'])
+})
+
+test('CSV exports: text cannot become a formula, numbers stay numbers, and our own CSV reads back', () => {
+  assert.equal(toCsv([['=1+1', '+1', '-1', '@x', '\tx', 'a=1', -5]]), `'=1+1,'+1,'-1,'@x,'\tx,a=1,-5\n`)
+  assert.equal(toCsv([['=HYPERLINK("x","y")']]), `"'=HYPERLINK(""x"",""y"")"\n`)
+  assert.match(redirectCsv([{ from: '=a', to: 'https://a.example/', action: '301', reason: 'r, s', queries: ['@q'] }]), /\n'=a,https:\/\/a.example\/,301,"r, s",'@q\n$/)
+  for (const q of ['=1+1', '+app', '-minus', '@handle', "'quoted", "'90s", 'plain, "x"']) {
+    const t = parseCsv(factsToCsv([{ g: 'query', date: '2026-10-01', query: q, clicks: 1, impressions: 10, position: 3 }]))
+    const map = autoMap(t.rows[0])
+    for (const d of ['page', 'country', 'device'] as const) delete map[d]
+    assert.equal(validate(t, map).facts[0].query, q)
+  }
+  // Someone else's file keeps its text as it is.
+  assert.equal(load(`Top queries,Clicks,Impressions,CTR,Position\n'=x,1,10,10%,3\n`, 'Queries.csv').v.facts[0].query, "'=x")
 })
 
 test('jump-link rows are added to their page instead of replacing it (lets-plot.org excerpt)', () => {
