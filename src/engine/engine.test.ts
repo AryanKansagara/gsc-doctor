@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { autoMap, detectKind, exportLength, filterDays, filtersNote, jsonTable, mergeFacts, normPage, parseCsv, parseCount, parseCtr, parseDate, parseNum, parsePosition, readFile, sumDuplicates, validate, type Table } from './parse.ts'
+import { autoMap, detectKind, exportLength, filterDays, filtersNote, jsonTable, mergeFacts, normPage, parseCsv, parseCount, parseCtr, parseDate, parseNum, parsePosition, slashOrder, readFile, sumDuplicates, validate, type Table } from './parse.ts'
 import {
   analyze, brandMatcher, cannibalClusters, cannibalisation, changePoint, checkTitle, compareSnapshots, contentDecay, decompose, diagnose,
   dropWindow, expectedCtr, slice, fitCurve, isotonicDecreasing, pageGroup, pixelWidth, redirectPlan, redirectRules, resolveWindow, snapshot, suggestTitle, theilSen, windowOptions,
@@ -61,6 +61,19 @@ test('dates, CTRs and URLs normalise', () => {
   assert.equal(parseCtr('3.5%'), 0.035)
   assert.equal(parseCtr('0.035'), 0.035)
   assert.equal(normPage('https://A.Example/Recipe/#jump'), 'https://a.example/Recipe/')
+})
+
+test('only known date layouts are read, and a column of slashed dates has one order', () => {
+  for (const bad of ['Week 12', 'unknown 5', 'Total 2026', 'Nov 2026', 'Q3 Oct 2026', '5 2026', '2026-10-01 to 2026-10-07', '2026-10-011', '2026-02-30', 'Oct 32, 2026', 'Foo 1, 2026', 'Octopus 1, 2026', 'Oct 1, 26', 'Oct 1 2026 total', '13/13/2026', '07.11.2026', '1/2/26', 'Infinity', '']) assert.equal(parseDate(bad), '', bad)
+  for (const ok of ['2026-11-07', '2026/11/7', '20261107', '46333', '11/7/2026', '11/07/2026 13:45', '11/7/2026 12:00 AM', '2026-11-07T23:30:00-05:00', '2026-11-07 00:00:00 UTC', 'Nov 7, 2026', 'November 7 2026', 'NOV. 7, 2026, 12:00:00 AM', '7 Nov 2026', '07-Nov-2026', '07/Nov/2026', '7Nov2026', 'Nov 7,2026', '2026-11-07Z', '7 november 2026', 'Saturday, November 7, 2026', 'Sat, 07 Nov 2026 23:00:00 GMT', 'Sat Nov 07 2026 00:00:00 GMT+0100 (CET)', '2026-Nov-07']) assert.equal(parseDate(ok), '2026-11-07', ok)
+  assert.equal(parseDate('07/11/2026', true), '2026-11-07')
+  assert.deepEqual([['07/11/2026', '13/11/2026'], ['11/13/2026', '1/2/2026'], ['01/02/2026'], ['13/11/2026', '11/13/2026'], ['13/13/2026'], ['2026-01-01'], ['01/02/2026', '99/02/2026']].map(slashOrder), ['day', 'month', 'ambiguous', 'mixed', 'mixed', 'none', 'ambiguous'])
+  const run = (...dates: string[]) => { const t = parseCsv('date,page,clicks,impressions,position\n' + dates.map((d, i) => `${d},https://a.example/${i},1,10,3`).join('\n')); return validate(t, autoMap(t.rows[0])) }
+  assert.deepEqual(run('07/11/2026', '13/11/2026').facts.map(f => f.date), ['2026-11-07', '2026-11-13'])
+  assert.deepEqual(run('07/11/2026', '08/11/2026').facts.map(f => f.date), ['2026-07-11', '2026-08-11'])
+  const mixed = run('13/11/2026', '11/13/2026', '01/02/2026')
+  assert.deepEqual([mixed.facts.length, mixed.skipped], [0, 3])
+  assert.match(mixed.issues[0].message, /none of the slashed dates/)
 })
 
 test('re-importing the same rows replaces them instead of double counting', () => {

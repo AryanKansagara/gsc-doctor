@@ -161,13 +161,13 @@ test('#8 rows that cannot be read are not replaced', async ({ page }) => {
 })
 
 test.describe('#9 dates', () => {
-  test.fail('text that is not a date is rejected', async ({ page }) => {
+  test('text that is not a date is rejected', async ({ page }) => {
     await newSite(page)
     await drop(page, file('rows.csv', 'date,page,clicks,impressions,position\nWeek 12,https://a.example/,1,10,3\n2026-10-01,https://a.example/,1,10,3\n'))
     await expect(page.getByText(/rows ready/)).toBeVisible()
     await expect(page.getByText('1 rows ready')).toBeVisible()
   })
-  test.fail('a day-first column is read day-first', async ({ page }) => {
+  test('a day-first column is read day-first', async ({ page }) => {
     await newSite(page)
     await drop(page, file('rows.csv', 'date,page,clicks,impressions,position\n07/11/2026,https://a.example/,1,10,3\n13/11/2026,https://a.example/,1,10,3\n'))
     await expect(page.getByText(/rows ready/)).toBeVisible()
