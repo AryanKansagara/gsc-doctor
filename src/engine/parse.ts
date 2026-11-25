@@ -213,18 +213,49 @@ export function parseCtr(raw: string | undefined): number {
   return n > 1 ? n / 100 : n
 }
 
-/** ISO dates, YYYY/MM/DD, US M/D/YYYY, compact 20261107 and Excel serial days. Returns YYYY-MM-DD or ''. */
-export function parseDate(raw: string | undefined): string {
+const MONTHS = ['jan(?:uary)?', 'feb(?:ruary)?', 'mar(?:ch)?', 'apr(?:il)?', 'may', 'june?', 'july?', 'aug(?:ust)?', 'sept?(?:ember)?', 'oct(?:ober)?', 'nov(?:ember)?', 'dec(?:ember)?']
+const MONTH = `(${MONTHS.join('|')})\\.?`
+const monthNo = (s: string) => MONTHS.findIndex(m => new RegExp(`^${m}$`, 'i').test(s)) + 1
+const TIME = '(?:Z|T\\d{2}(?::.*)?|[ ,]\\s*\\d{1,2}:\\d{2}.*)?$'
+const ISO_DATE = new RegExp(`^(\\d{4})([-/])(\\d{1,2})\\2(\\d{1,2})${TIME}`, 'i')
+const SLASHED = new RegExp(`^(\\d{1,2})/(\\d{1,2})/(\\d{4})${TIME}`, 'i')
+const WEEKDAY = '^(?:(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\\.?,?\\s+)?'
+const MONTH_FIRST = new RegExp(`${WEEKDAY}${MONTH}[\\s/-]*(\\d{1,2})(?:,\\s*|[\\s/-]+)(\\d{4})${TIME}`, 'i')
+const DAY_FIRST = new RegExp(`${WEEKDAY}(\\d{1,2})[\\s/-]*${MONTH}(?:,\\s*|[\\s/-]*)(\\d{4})${TIME}`, 'i')
+const YEAR_FIRST = new RegExp(`^(\\d{4})[\\s-]+${MONTH}[\\s-]+(\\d{1,2})${TIME}`, 'i')
+
+/**
+ * ISO dates, YYYY/MM/DD, compact 20261107, Excel serial days, slashed dates (month first unless `dayFirst`) and dates with an
+ * English month name, a day and a four-digit year, each with an optional time. Returns YYYY-MM-DD, or '' for anything else.
+ */
+export function parseDate(raw: string | undefined, dayFirst = false): string {
   const s = (raw ?? '').trim()
-  let m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/)
-  if (m) return iso(+m[1], +m[2], +m[3])
+  let m = s.match(ISO_DATE)
+  if (m) return iso(+m[1], +m[3], +m[4])
   m = s.match(/^(\d{4})(\d{2})(\d{2})$/)
   if (m) return iso(+m[1], +m[2], +m[3])
-  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
-  if (m) return iso(+m[3], +m[1], +m[2])
+  m = s.match(SLASHED)
+  if (m) return dayFirst ? iso(+m[3], +m[2], +m[1]) : iso(+m[3], +m[1], +m[2])
   if (/^\d{5}(\.\d+)?$/.test(s) && +s > 30000 && +s < 80000) return new Date(Date.UTC(1899, 11, 30) + Math.floor(+s) * 86400000).toISOString().slice(0, 10)
-  const t = Date.parse(s + (/\d{4}$/.test(s) ? ' UTC' : ''))
-  return Number.isFinite(t) && /[a-z]/i.test(s) ? new Date(t).toISOString().slice(0, 10) : ''
+  m = s.match(MONTH_FIRST)
+  if (m) return iso(+m[3], monthNo(m[1]), +m[2])
+  m = s.match(DAY_FIRST)
+  if (m) return iso(+m[3], monthNo(m[2]), +m[1])
+  m = s.match(YEAR_FIRST)
+  return m ? iso(+m[1], monthNo(m[2]), +m[3]) : ''
+}
+
+/** How a column writes slashed dates. Part values no day can have (99) tell nothing. */
+export function slashOrder(cells: (string | undefined)[]): 'none' | 'month' | 'day' | 'ambiguous' | 'mixed' {
+  let seen = false, first = false, second = false
+  for (const c of cells) {
+    const m = (c ?? '').trim().match(SLASHED)
+    if (!m) continue
+    seen = true
+    if (+m[1] > 12 && +m[1] <= 31) first = true
+    if (+m[2] > 12 && +m[2] <= 31) second = true
+  }
+  return !seen ? 'none' : first && second ? 'mixed' : first ? 'day' : second ? 'month' : 'ambiguous'
 }
 function iso(y: number, mo: number, d: number) {
   const t = new Date(Date.UTC(y, mo - 1, d))
@@ -382,6 +413,9 @@ export function validate(t: Table, map: Mapping): Validation {
   const dotDecimal = usesDotDecimals(counts)
   const grouped = dotDecimal ? undefined : counts.find(c => DOT_GROUPS.test(bare(c)))
   if (grouped) issues.push({ line: head, level: 'warning', message: `Clicks and impressions like "${grouped.trim()}" are read as thousands (${parseCount(grouped).toLocaleString('en-US')}).` })
+  const order = dated ? slashOrder(t.rows.slice(1).map(x => x[map.date!])) : 'none'
+  if (order === 'day') issues.push({ line: head, level: 'warning', message: 'Dates are read day first (DD/MM/YYYY).' })
+  if (order === 'mixed') issues.push({ line: head, level: 'error', message: 'Some dates can only be MM/DD/YYYY and others only DD/MM/YYYY, so none of the slashed dates can be read. Use YYYY-MM-DD.' })
   let skipped = 0, zero = 0, otherType = 0, anon = 0, merged = 0
   let lo = '', hi = ''
   for (let r = 1; r < t.rows.length; r++) {
@@ -406,7 +440,7 @@ export function validate(t: Table, map: Mapping): Validation {
     }
     if (bad) continue
     if (dated) {
-      const d = parseDate(row[map.date!])
+      const d = order === 'mixed' && SLASHED.test((row[map.date!] ?? '').trim()) ? '' : parseDate(row[map.date!], order === 'day')
       if (!d) { err(`Unreadable date "${row[map.date!] ?? ''}". Use YYYY-MM-DD.`); continue }
       base.date = d
       if (!lo || d < lo) lo = d
