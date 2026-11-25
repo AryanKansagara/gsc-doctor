@@ -175,12 +175,21 @@ test.describe('#9 dates', () => {
   })
 })
 
-test.fail('#10 decay is not declared clean without dated page rows', async ({ page }) => {
+test('#10 decay is not declared clean without dated page rows', async ({ page }) => {
   await newSite(page)
   await importAll(page, file('export.zip', zip(standardExport())))
   await tab(page, 'Decay')
   await expect(page.locator('.empty h3')).toBeVisible()
   await expect(page.getByText('No decaying pages')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Needs dated page rows' })).toBeVisible()
+})
+
+test('#10 decay says when the history is too short for the lookback', async ({ page }) => {
+  await newSite(page)
+  await importAll(page, file('rows.csv', flatPages('2026-01-01', 120)))
+  await tab(page, 'Decay')
+  await expect(page.getByRole('heading', { name: 'Not enough history' })).toBeVisible()
+  await expect(page.locator('.empty')).toContainText('2026-01-01 to 2026-04-30')
 })
 
 test('#11 page rows that end before the chart are not decay', async ({ page }) => {

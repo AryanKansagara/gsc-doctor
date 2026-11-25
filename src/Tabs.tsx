@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import {
-  brandMatcher, checkTitle, compareSnapshots, dailyTotals, diagnose, dropWindow, expectedCtr, KIND_LABEL, redirectCsv, redirectRules, shortUrl, suggestTitle,
+  brandMatcher, checkTitle, compareSnapshots, dailyTotals, diagnose, dropWindow, expectedCtr, fmtMonth, KIND_LABEL, redirectCsv, redirectRules, shortUrl, suggestTitle,
   type Action, type ActionKind, type Analysis, type DropRow, type QueryPoint,
 } from './engine/analyze.ts'
 import { toCsv } from './engine/parse.ts'
@@ -243,8 +243,11 @@ function Cannibal({ project, a }: TabProps) {
 
 // ---------- Decay ----------
 
-function DecayTab({ a }: TabProps) {
-  if (!a.has.dated) return <div className="panel"><Empty title="Needs dated page rows">Decay needs clicks per page per month. Import dated rows (API, Sheets, Looker Studio or BigQuery) with a date and page column. <p><Link href="/docs#query-page" className="btn primary">How to export</Link></p></Empty></div>
+function DecayTab({ a, project }: TabProps) {
+  const { state, needed, held } = a.decayCheck
+  if (state === 'no-rows') return <div className="panel"><Empty title="Needs dated page rows">Decay needs clicks per page per month. Import dated rows (API, Sheets, Looker Studio or BigQuery) with a date and page column. <p><Link href="/docs#query-page" className="btn primary">How to export</Link></p></Empty></div>
+  if (state === 'no-range') return <div className="panel"><Empty title="Not checked for this range">Decay compares months, and the imported export period has none. Dated page rows cover {held![0]} to {held![1]}: choose a dated range at the top right.</Empty></div>
+  if (state === 'short') return <div className="panel"><Empty title="Not enough history">A lookback of {project.settings.decayMonths} months needs page rows for every month from {fmtMonth(needed![0])} to {fmtMonth(needed![1])}; the longest table covers {held![0]} to {held![1]}. Import more months, or <Link href={`/app/p/${project.id}/data`}>shorten the lookback</Link>.</Empty></div>
   if (!a.decay.length) return <div className="panel"><Empty title="No decaying pages">No page lost 25%+ of its baseline clicks over the lookback window on a robust (Theil–Sen) trend.</Empty></div>
   return (
     <>

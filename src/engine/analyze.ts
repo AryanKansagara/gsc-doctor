@@ -445,14 +445,26 @@ export function redirectRules(rs: Redirect[]): RedirectRules {
 
 export interface Decay { page: string; months: string[]; series: number[]; slope: number; change: number; baseline: number; last: number; pattern: 'steady' | 'step'; gain: number; lost: { query: string; before: number; after: number; posBefore: number; posAfter: number }[] }
 
+const decayMonths = (endMonth: string, months: number) => { const ms = [endMonth]; while (ms.length < months) ms.unshift(prevMonth(ms[0])); return ms }
+/** The tables that hold every month: one they do not reach would count as zero clicks. */
+const wholeTables = (spans: Map<string, Span>, ms: string[]) => [...spans.keys()].filter(g => { const [lo, hi] = spans.get(g)!; return lo <= `${ms[0]}-07` && dayDiff(hi, monthEnd(ms[ms.length - 1])) <= 3 })
+
+/** Whether decay could be looked for: without dated page rows, a dated range or enough history an empty list means nothing. */
+export interface DecayCheck { state: 'ok' | 'no-rows' | 'no-range' | 'short'; needed?: [string, string]; held?: [string, string] }
+export function decayCheck(ds: Fact[], endMonth: string, months: number): DecayCheck {
+  const spans = tableSpans(ds)
+  const held = [...spans].filter(([g]) => grainDims(g).includes('page')).map(([, s]) => s).sort((a, b) => dayDiff(b[0], b[1]) - dayDiff(a[0], a[1]))[0]
+  if (!held) return { state: 'no-rows' }
+  if (!endMonth) return { state: 'no-range', held }
+  const ms = decayMonths(endMonth, months)
+  return { state: coarsest(wholeTables(spans, ms), ['page']) === null ? 'short' : 'ok', needed: [ms[0], endMonth], held }
+}
+
 /** Monthly clicks per page over the last N complete months; flags pages whose Theil–Sen trend lost 25%+ of their baseline. */
 export function contentDecay(ds: Fact[], endMonth: string, months: number, minLoss = 20): Decay[] {
-  const ms: string[] = [endMonth]
-  while (ms.length < months) ms.unshift(prevMonth(ms[0]))
+  const ms = decayMonths(endMonth, months)
   const idx = new Map(ms.map((m, i) => [m, i]))
-  // Only a table that holds every month is read: a month it does not reach would count as zero clicks.
-  const spans = tableSpans(ds)
-  const whole = [...spans.keys()].filter(g => { const [lo, hi] = spans.get(g)!; return lo <= `${ms[0]}-07` && dayDiff(hi, monthEnd(endMonth)) <= 3 })
+  const whole = wholeTables(tableSpans(ds), ms)
   const grain = coarsest(whole, ['page'])
   if (grain === null) return []
   const series = new Map<string, number[]>()
@@ -727,12 +739,13 @@ export interface Analysis {
   redirects: Redirect[]
   clusters: CannibalCluster[]
   decay: Decay[]
+  decayCheck: DecayCheck
   actions: Action[]
   totals: { cur: Parts & { ctr: number }; prev: Parts & { ctr: number } | null }
   brand: ReturnType<typeof brandSplit>
   groups: { group: string; clicks: number; impressions: number; prevClicks: number; pages: number }[]
   pages: { page: string; clicks: number; impressions: number; position: number; prevClicks: number }[]
-  has: { prevPages: boolean; queryPage: boolean; dated: boolean; pages: boolean; queries: boolean }
+  has: { prevPages: boolean; queryPage: boolean; pages: boolean; queries: boolean }
 }
 
 export function analyze(ds: Fact[], winKey: string, s: Settings): Analysis {
@@ -748,9 +761,9 @@ export function analyze(ds: Fact[], winKey: string, s: Settings): Analysis {
   const pages = [...pageSl.cur.values()].map(a => ({ page: a.dims.page!, clicks: a.clicks * perMonth, impressions: a.impressions * perMonth, position: pos(a), prevClicks: (pageSl.prev.get(a.key)?.clicks ?? 0) * perMonth })).sort((a, b) => b.clicks - a.clicks)
   const clusters = cannibalClusters(cannibals)
   const redirects = redirectPlan(clusters, new Map(pages.map(p => [p.page, p.clicks])))
-  const dated = !!dateBounds(ds)
   const end = win.cur ? (win.cur[1] >= addDays(`${nextMonth(win.cur[1].slice(0, 7))}-01`, -1) ? win.cur[1].slice(0, 7) : prevMonth(win.cur[1].slice(0, 7))) : ''
-  const decay = dated && end ? contentDecay(ds, end, s.decayMonths, Math.max(10, s.minImpressions / 3)) : []
+  const decayState = decayCheck(ds, end, s.decayMonths)
+  const decay = decayState.state === 'ok' ? contentDecay(ds, end, s.decayMonths, Math.max(10, s.minImpressions / 3)) : []
 
   const actions: Action[] = []
   // CTR gaps, grouped by the page that ranks.
@@ -799,12 +812,12 @@ export function analyze(ds: Fact[], winKey: string, s: Settings): Analysis {
   const groupMap = new Map<string, { group: string; clicks: number; impressions: number; prevClicks: number; pages: number }>()
   for (const p of pages) { const g = pageGroup(p.page, s.groupDepth); const r = groupMap.get(g) ?? { group: g, clicks: 0, impressions: 0, prevClicks: 0, pages: 0 }; r.clicks += p.clicks; r.impressions += p.impressions; r.prevClicks += p.prevClicks; r.pages++; groupMap.set(g, r) }
   return {
-    win, curve, points, striking, gaps, cannibals, clusters, redirects, decay, actions,
+    win, curve, points, striking, gaps, cannibals, clusters, redirects, decay, decayCheck: decayState, actions,
     totals: { cur: mk(tc), prev: tp.impressions ? mk(tp) : null },
     brand: brandSplit(ds, win, isBrand),
     groups: [...groupMap.values()].sort((a, b) => b.clicks - a.clicks),
     pages,
-    has: { prevPages: pageSl.prev.size > 0, queryPage: slice(ds, ['query', 'page'], win).grain !== null, dated, pages: pageSl.grain !== null, queries: slice(ds, ['query'], win).grain !== null },
+    has: { prevPages: pageSl.prev.size > 0, queryPage: slice(ds, ['query', 'page'], win).grain !== null, pages: pageSl.grain !== null, queries: slice(ds, ['query'], win).grain !== null },
   }
 }
 
