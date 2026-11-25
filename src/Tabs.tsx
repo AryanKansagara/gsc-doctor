@@ -189,7 +189,7 @@ function Worklist({ project, a, update }: TabProps) {
         </div>
         <p className="muted small" style={{ margin: '12px 0 0' }}>{list.length} actions worth about <b>{fmtN(total)}</b> clicks a month if they work. Gains assume this site&rsquo;s own CTR curve; consolidation assumes the merged page ranks where the best one does.</p>
       </div>
-      {list.length ? list.map((x, i) => <ActionCard key={x.id} x={x} rank={i} project={project} update={update} />) : <div className="panel"><Empty title="All clear">Nothing left in this list. Lower the minimum impressions, or compare another month.</Empty></div>}
+      {list.length ? list.map((x, i) => <ActionCard key={x.id} x={x} rank={i} project={project} update={update} />) : <div className="panel"><Empty title={a.has.queries ? 'All clear' : 'Nothing found'}>{a.has.queries ? "Nothing left in this list." : "Not every check could run for this date range."} Lower the minimum impressions, or compare another month.</Empty></div>}
     </>
   )
 }
