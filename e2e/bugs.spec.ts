@@ -72,7 +72,7 @@ test.describe('#3 windows the data does not cover', () => {
   })
 })
 
-test.fail('#4 a second monthly export keeps its own length', async ({ page }) => {
+test('#4 a second monthly export keeps its own length', async ({ page }) => {
   const month = (from: string, n: number) => zip({ 'Chart.csv': `Date,${HEAD}\n` + days(from, n).map(d => `${d},10,100,10%,3`).join('\n'), 'Pages.csv': `Top pages,${HEAD}\nhttps://a.example/p/,${n * 10},${n * 100},10%,3\n` })
   await newSite(page)
   await importMore(page, file('sep.zip', month('2026-09-01', 30)))
@@ -80,6 +80,21 @@ test.fail('#4 a second monthly export keeps its own length', async ({ page }) =>
   await tab(page, 'Overview')
   // October alone: 300 x 30.44 / 30 = 304.4
   await expect(kpi(page, 'clicks')).toHaveText('304')
+})
+
+test('#4 tables imported one at a time keep their export\'s length, and a later lone table does not inherit it', async ({ page }) => {
+  await newSite(page)
+  await importMore(page, file('Chart.csv', `Date,${HEAD}\n` + days('2026-08-01', 60).map(d => `${d},10,100,10%,3`).join('\n')))
+  await drop(page, file('export.zip', zip(standardExport())))
+  await page.locator('.panel', { hasText: 'export.zip › Devices.csv' }).getByRole('button', { name: 'Import 2 rows' }).click()
+  await expect(page.getByRole('rowheader', { name: 'export.zip › Devices.csv' })).toBeVisible()
+  await tab(page, 'Overview')
+  await expect(kpi(page, 'clicks')).toHaveText('304')
+  await tab(page, 'Data & settings')
+  // A lone table says nothing about its length, so the chart days (60) are the best guess again: 280 x 30.44 / 60 = 142.
+  await importMore(page, file('Devices.csv', `Device,${HEAD}\nDesktop,280,5600,5%,4\n`))
+  await tab(page, 'Overview')
+  await expect(kpi(page, 'clicks')).toHaveText('142')
 })
 
 test.fail('#5 German counts and positions are read by field', async ({ page }) => {

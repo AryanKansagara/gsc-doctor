@@ -39,7 +39,7 @@ export interface Settings {
   decayMonths: number
   /** Ignore queries or pages with fewer impressions per month than this */
   minImpressions: number
-  /** Length in days of an undated export that came without its chart table (compare mode), read from its Filters table */
+  /** Length in days of the export the undated tables came from: its chart table, else its Filters table, else typed in */
   exportDays?: number
 }
 

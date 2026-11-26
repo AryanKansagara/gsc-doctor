@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { addDays } from './engine/updates.ts'
-import { autoMap, detectKind, factsToCsv, FIELDS, filterDays, filtersNote, sumDuplicates, KIND_LABEL, mergeFacts, readFile, validate, type Mapping, type Table, type TableKind } from './engine/parse.ts'
+import { autoMap, detectKind, factsToCsv, exportLength, FIELDS, filtersNote, sumDuplicates, KIND_LABEL, mergeFacts, readFile, validate, type Mapping, type Table, type TableKind } from './engine/parse.ts'
 import type { Fact, Settings } from './engine/types.ts'
 import { createBlankProject } from './projectData.ts'
 import { putData, saveProject, uuid, type Project } from './store.ts'
@@ -9,12 +9,11 @@ import { ask, download, go, Link, toast } from './ui.tsx'
 
 export const PUBLIC_EXPORT = { url: '/samples/lets-plot-org-2024.zip', file: 'lets-plot.org-Performance-on-Search-2024-12-18.zip', label: 'lets-plot.org, Jan to Dec 2024' }
 
-interface Pending { id: string; file: string; table: Table; map: Mapping; kind: TableKind }
+interface Pending { id: string; file: string; table: Table; map: Mapping; kind: TableKind; days: number | null }
 
 export default function DataTab({ project, ds, update }: { project: Project; ds: Fact[]; update(p: Partial<Project>): void }) {
   const [pending, setPending] = useState<Pending[]>([])
   const [note, setNote] = useState('')
-  const [days, setDays] = useState<number | null>(null)
   const [drag, setDrag] = useState(false)
   const [busy, setBusy] = useState(false)
   const input = useRef<HTMLInputElement>(null)
@@ -24,23 +23,30 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
   const readFiles = async (files: FileList | File[]) => {
     setBusy(true)
     const next: Pending[] = []
+    // A zip or workbook is one export; loose CSVs dropped together are the tables of one export.
+    const loose: Table[] = []
+    const looseIds = new Set<string>()
     for (const f of [...files]) {
       if (f.size > 150_000_000) { toast(`${f.name} is over 150 MB. Export a shorter date range.`, { tone: 'error' }); continue }
       try {
         const tables = await readFile(f.name, await f.arrayBuffer())
         const n = filtersNote(tables)
         if (n) setNote(n)
-        const d = filterDays(tables)
-        if (d) setDays(d)
+        const single = tables.length === 1
+        if (single) loose.push(...tables)
+        const days = single ? null : exportLength(tables)
         for (const t of tables) {
           if (t.rows.length < 2) continue
           const map = autoMap(t.rows[0])
-          next.push({ id: uuid(), file: tables.length > 1 ? `${f.name} › ${t.name}` : f.name, table: t, map, kind: detectKind(t, map) })
+          const id = uuid()
+          if (single) looseIds.add(id)
+          next.push({ id, file: single ? f.name : `${f.name} › ${t.name}`, table: t, map, kind: detectKind(t, map), days })
         }
         if (!tables.some(t => t.rows.length > 1)) toast(`${f.name} has no data rows.`, { tone: 'error' })
       } catch (e) { toast(`${f.name}: ${e instanceof Error ? e.message : 'could not be read'}`, { tone: 'error' }) }
     }
-    setPending(p => [...p, ...next])
+    const looseDays = exportLength(loose)
+    setPending(p => [...p, ...next.map(n => looseIds.has(n.id) ? { ...n, days: looseDays } : n)])
     setBusy(false)
   }
 
@@ -53,9 +59,10 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
     for (const i of items) merged = mergeFacts(merged, i.facts)
     await putData(t.id, merged)
     const metas = items.map(i => ({ id: uuid(), kind: i.p.kind, fileName: i.p.file, rows: i.facts.length, skipped: i.skipped, at: Date.now(), range: i.range }))
-    // An undated export without its chart (compare mode) only states its length in the Filters table.
-    const undated = items.some(i => i.facts.some(f => !f.date))
-    await saveProject({ ...t, settings: days && undated ? { ...t.settings, exportDays: days } : t.settings, imports: [...(project.sampleId ? [] : project.imports), ...metas], dataMissing: false })
+    // The length belongs to the export that supplied the undated tables; an earlier import's length says nothing about these.
+    const undated = items.filter(i => i.facts.some(f => !f.date))
+    const days = undated.at(-1)?.p.days ?? undefined
+    await saveProject({ ...t, settings: undated.length ? { ...t.settings, exportDays: days } : t.settings, imports: [...(project.sampleId ? [] : project.imports), ...metas], dataMissing: false })
     setPending(x => x.filter(y => !items.some(i => i.p.id === y.id)))
     toast(`Imported ${items.reduce((s, i) => s + i.facts.length, 0).toLocaleString()} rows from ${items.length} table${items.length > 1 ? 's' : ''}`, { tone: 'ok' })
     if (project.sampleId) go(`/app/p/${t.id}`)
@@ -108,7 +115,7 @@ export default function DataTab({ project, ds, update }: { project: Project; ds:
 
       {pending.map(p => <PendingTable key={p.id} p={p} onChange={n => setPending(x => x.map(y => y.id === p.id ? n : y))} onCancel={() => setPending(x => x.filter(y => y.id !== p.id))} onCommit={(facts, skipped, range) => commit([{ p, facts, skipped, range }])} />)}
 
-      <LivePull onRows={facts => commit([{ p: { id: uuid(), file: 'Search Console API (live pull)', table: { name: '', rows: [], lines: [] }, map: {}, kind: 'rows' }, facts, skipped: 0, range: null }])} />
+      <LivePull onRows={facts => commit([{ p: { id: uuid(), file: 'Search Console API (live pull)', table: { name: '', rows: [], lines: [] }, map: {}, kind: 'rows', days: null }, facts, skipped: 0, range: null }])} />
 
       <div className="panel">
         <div className="panel-head"><h2>Site settings</h2><span className="muted small">Changes recompute everything instantly</span></div>
