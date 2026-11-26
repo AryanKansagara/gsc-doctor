@@ -1,4 +1,5 @@
 import { ctr, DIMS, pos, type Agg, type Dim, type Fact, type Settings } from './types.ts'
+import { toCsv } from './parse.ts'
 import { addDays, updatesNear, type Update } from './updates.ts'
 
 // ---------- Windows ----------
@@ -377,7 +378,7 @@ export function redirectPlan(clusters: CannibalCluster[], pageClicks: Map<string
   return out
 }
 
-export const redirectCsv = (rs: Redirect[]) => ['from,to,action,reason,queries', ...rs.map(r => [r.from, r.to, r.action, r.reason, r.queries.join('; ')].map(v => /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v).join(','))].join('\n') + '\n'
+export const redirectCsv = (rs: Redirect[]) => toCsv([['from', 'to', 'action', 'reason', 'queries'], ...rs.map(r => [r.from, r.to, r.action, r.reason, r.queries.join('; ')])])
 
 export interface RedirectRules { apache: string[]; nginx: string[]; manual: { from: string; to: string; why: string }[] }
 
