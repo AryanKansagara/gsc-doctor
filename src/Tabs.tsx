@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import {
-  brandMatcher, checkTitle, compareSnapshots, dailyTotals, diagnose, dropWindow, expectedCtr, KIND_LABEL, redirectCsv, shortUrl, suggestTitle,
+  brandMatcher, checkTitle, compareSnapshots, dailyTotals, diagnose, dropWindow, expectedCtr, KIND_LABEL, redirectCsv, redirectRules, shortUrl, suggestTitle,
   type Action, type ActionKind, type Analysis, type DropRow, type QueryPoint,
 } from './engine/analyze.ts'
 import { toCsv } from './engine/parse.ts'
@@ -195,8 +195,8 @@ function Worklist({ project, a, update }: TabProps) {
 function Cannibal({ project, a }: TabProps) {
   if (!a.has.queryPage) return <div className="panel"><Empty title="Needs query + page rows">Cannibalisation means several of your pages ranking for the same query. The Performance export never pairs queries with pages, so pull query + page rows (API, Sheets add-on, Looker Studio or BigQuery). <p><Link href="/docs#query-page" className="btn primary">Show me how</Link></p></Empty></div>
   if (!a.clusters.length) return <div className="panel"><Empty title="No cannibalisation found">No non-branded query has two or more pages each taking 10%+ of its impressions with an unstable leader.</Empty></div>
-  const htaccess = a.redirects.filter(r => r.action === '301').map(r => `Redirect 301 ${shortUrl(r.from)} ${r.to}`).join('\n')
-  const nginx = a.redirects.filter(r => r.action === '301').map(r => `location = ${shortUrl(r.from)} { return 301 ${r.to}; }`).join('\n')
+  const rules = redirectRules(a.redirects)
+  const htaccess = rules.apache.join('\n'), nginx = rules.nginx.join('\n')
   return (
     <>
       <div className="panel tint">
@@ -226,6 +226,10 @@ function Cannibal({ project, a }: TabProps) {
         {htaccess && <div className="grid-2" style={{ marginTop: 12 }}>
           <div><div className="code"><div className="code-head"><span>.htaccess (Apache)</span><CopyButton text={htaccess} /></div><pre><code>{htaccess}</code></pre></div></div>
           <div><div className="code"><div className="code-head"><span>nginx</span><CopyButton text={nginx} /></div><pre><code>{nginx}</code></pre></div></div>
+        </div>}
+        {rules.manual.length > 0 && <div className="small" style={{ marginTop: 12 }}>
+          <strong>Redirect these by hand:</strong> a path rule cannot express them.
+          <ul>{rules.manual.map(m => <li key={m.from} className="break">{m.from} → {m.to} (first URL {m.why})</li>)}</ul>
         </div>}
         <p className="muted tiny">Merge the content first, then redirect. Keep redirects in place for at least a year.</p>
       </div>
