@@ -40,7 +40,7 @@ export default function Report({ id }: { id: string }) {
       </div>
       <div className="eyebrow">Monthly SEO report</div>
       <h1>{project.name}, {a.win.label} {project.sampleId && <SyntheticBadge />}</h1>
-      <p className="muted">{a.win.cur ? `${a.win.cur[0]} to ${a.win.cur[1]}, compared with ${a.win.prev![0]} to ${a.win.prev![1]}` : 'Imported export period'} · Google Search, web results · prepared {new Date().toLocaleDateString('en-US', { dateStyle: 'long' })}</p>
+      <p className="muted">{a.win.cur ? `${a.win.cur[0]} to ${a.win.cur[1]}${p ? `, compared with ${a.win.prev![0]} to ${a.win.prev![1]}` : ''}` : 'Imported export period'} · Google Search, web results · prepared {new Date().toLocaleDateString('en-US', { dateStyle: 'long' })}</p>
       <div className="kpis gsc">
         <div className="kpi clicks"><small>Clicks / month</small><b>{fmtK(c.clicks)}</b><span className="small">{p ? ch(c.clicks, p.clicks) : ''}</span></div>
         <div className="kpi impressions"><small>Impressions / month</small><b>{fmtK(c.impressions)}</b><span className="small">{p ? ch(c.impressions, p.impressions) : ''}</span></div>

@@ -229,6 +229,26 @@ test('page groups by path depth', () => {
   assert.equal(pageGroup('https://x.example/banana-bread/'), '/* (top level)')
 })
 
+test('windows the data does not cover: no comparison, and a short window is scaled by its own days', () => {
+  const flat = (n: number, g = 'page'): Fact[] => Array.from({ length: n }, (_, i) => ({ g, date: day(i), ...(g ? { page: 'https://a.example/p' } : {}), clicks: 10, impressions: 100, position: 3 }))
+  const run = (ds: Fact[], w = 'l28') => analyze(ds, w, DEFAULT_SETTINGS)
+  // 10 clicks a day is 304.4 a month whatever the span.
+  for (const n of [1, 10, 27, 28, 40, 55, 56, 100]) assert.ok(Math.abs(run(flat(n)).totals.cur.clicks - 304.4) < 1e-6, String(n))
+  assert.deepEqual([run(flat(10)).win.label, run(flat(10)).win.days, run(flat(1)).win.label], ['Last 10 days', 10, 'Last 1 day'])
+  for (const n of [28, 40, 55]) { const a = run(flat(n)); assert.equal(a.totals.prev, null); assert.equal(a.has.prevPages, false) }
+  assert.ok(Math.abs(run(flat(56)).totals.prev!.clicks - 304.4) < 1e-6)
+  assert.equal(run(flat(40), '2026-01').totals.prev, null)
+  assert.equal(run(flat(181), 'l3m').totals.prev, null)
+  assert.notEqual(run(flat(182), 'l3m').totals.prev, null)
+  // A page table that starts later than the daily totals is not compared, one that misses its first 3 days is.
+  const mixed = (from: number) => [...flat(80, ''), ...flat(80).slice(from)]
+  const prevPages = (from: number) => slice(mixed(from), ['page'], resolveWindow(mixed(from), 'l28')).prev.size
+  assert.deepEqual([24, 27, 28, 40].map(prevPages), [1, 1, 0, 0])
+  const d = diagnose(flat(40), resolveWindow(flat(40), 'l28'), run(flat(40)).curve, DEFAULT_SETTINGS, () => false)
+  assert.equal(d.scope, 'unknown')
+  assert.match(d.scopeText, /does not cover the whole previous period/)
+})
+
 test('title checks flag width, missing query, and the suggestion fits and leads with the query', () => {
   const bad = checkTitle('Cookies', 'chocolate chip cookies recipe')
   assert.ok(bad.some(c => c.level === 'bad' && /Missing/.test(c.message)))
