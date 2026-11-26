@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { autoMap, detectKind, exportLength, filterDays, filtersNote, jsonTable, mergeFacts, normPage, parseCsv, parseCtr, parseDate, parseNum, readFile, sumDuplicates, validate, type Table } from './parse.ts'
+import { autoMap, detectKind, exportLength, filterDays, filtersNote, jsonTable, mergeFacts, normPage, parseCsv, parseCount, parseCtr, parseDate, parseNum, parsePosition, readFile, sumDuplicates, validate, type Table } from './parse.ts'
 import {
   analyze, brandMatcher, cannibalClusters, cannibalisation, changePoint, checkTitle, compareSnapshots, contentDecay, decompose, diagnose,
   dropWindow, expectedCtr, slice, fitCurve, isotonicDecreasing, pageGroup, pixelWidth, redirectPlan, redirectRules, resolveWindow, snapshot, suggestTitle, theilSen, windowOptions,
@@ -401,6 +401,22 @@ test('jump-link rows are added to their page instead of replacing it (lets-plot.
   // The API returns the same thing as separate keys.
   const api = sumDuplicates([{ g: 'page', date: '2026-01-01', page: 'https://a.example/x', clicks: 4, impressions: 100, position: 2 }, { g: 'page', date: '2026-01-01', page: 'https://a.example/x', clicks: 1, impressions: 300, position: 6 }])
   assert.deepEqual(api.map(f => [f.clicks, f.impressions, f.position]), [[5, 400, 5]])
+})
+
+test('numbers are read by field: counts are whole, positions are decimals', () => {
+  for (const [s, n] of [['1.234', 1234], ['1.234.567', 1234567], ['1,234', 1234], ['1,234,567', 1234567], ['1 234', 1234], ["1'234", 1234], ['1’234', 1234], ['12', 12], ['12.0', 12], ['0', 0]] as const) assert.equal(parseCount(s), n, s)
+  assert.equal(parseCount('5.000', true), 5)
+  for (const [s, n] of [['7,125', 7.125], ['7.125', 7.125], ['11,75', 11.75], ['3', 3], ['1,234.5', 1234.5]] as const) assert.equal(parsePosition(s), n, s)
+  assert.equal(parseNum('0,125'), 0.125)
+  for (const s of ['', '-', 'many', '1.2.3', '1.23.456']) { assert.ok(Number.isNaN(parseCount(s)), s); assert.ok(Number.isNaN(parsePosition(s)), s) }
+  // 1,234 / 45,678 = 2.7%, as the file says.
+  const de = load('Die häufigsten Seiten;Klicks;Impressionen;CTR;Position\nhttps://a.example/;1.234;45.678;2,7%;7,125\n', 'Seiten.csv').v
+  assert.deepEqual([de.facts[0].clicks, de.facts[0].impressions, de.facts[0].position], [1234, 45678, 7.125])
+  assert.deepEqual(de.issues.map(i => i.level), ['warning'])
+  // A table that shows dot decimals elsewhere keeps "5.000" as 5; a real fraction of a click is refused.
+  const us = load('page,clicks,impressions,position\nhttps://a.example/,5.000,1234.000,3\nhttps://a.example/b,2.500,100.000,3\n', 'rows.csv').v
+  assert.deepEqual([us.facts[0].clicks, us.facts[0].impressions, us.facts.length], [5, 1234, 1])
+  assert.match(us.issues[0].message, /Clicks "2.500" is not a whole number/)
 })
 
 test('raw BigQuery searchdata_url_impression: zero-based sum_position, anonymised and non-web rows', () => {

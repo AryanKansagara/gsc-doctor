@@ -177,10 +177,31 @@ export function parseNum(raw: string | undefined): number {
   let s = (raw ?? '').trim().replace(/[\s\u00a0\u202f]/g, '')
   if (s === '' || /^(null|nan|-|—)$/i.test(s)) return NaN
   // "1,234" and "1,234.5" are thousands; "1.234,5" and "11,75" are decimal commas (German, French, Spanish exports).
-  if (/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) s = s.replace(/,/g, '')
+  if (/^-?[1-9]\d{0,2}(,\d{3})+(\.\d+)?$/.test(s)) s = s.replace(/,/g, '')
   else if (/^-?\d{1,3}(\.\d{3})+,\d+$/.test(s)) s = s.replace(/\./g, '').replace(',', '.')
   else if (/^-?\d+,\d+$/.test(s)) s = s.replace(',', '.')
   return Number(s)
+}
+
+const DOT_GROUPS = /^[1-9]\d{0,2}(\.\d{3})+$/
+const bare = (raw: string | undefined) => (raw ?? '').trim().replace(/[\s  '’]/g, '')
+
+/**
+ * Clicks and impressions are whole numbers, so groups of three are thousands whatever the separator: "1.234" is 1234 in a
+ * German export. With `dotDecimal` the table writes decimals with a dot ("5.000" is 5).
+ */
+export function parseCount(raw: string | undefined, dotDecimal = false): number {
+  const s = bare(raw)
+  return !dotDecimal && DOT_GROUPS.test(s) ? Number(s.replace(/\./g, '')) : parseNum(s)
+}
+
+/** A count column that shows a dot followed by anything but one group of three uses the dot as its decimal mark. */
+export const usesDotDecimals = (cells: string[]) => cells.some(c => { const s = bare(c); return /^\d+\.\d+$/.test(s) && !DOT_GROUPS.test(s) })
+
+/** Average positions are small decimals: a lone "," or "." is the decimal mark, so "7,125" is 7.125. */
+export function parsePosition(raw: string | undefined): number {
+  const s = bare(raw)
+  return /^\d+,\d+$/.test(s) ? Number(s.replace(',', '.')) : parseNum(s)
 }
 
 /** "3.2%" -> 0.032, "0.032" -> 0.032, "3.2" -> 0.032 */
@@ -350,6 +371,11 @@ export function validate(t: Table, map: Mapping): Validation {
   const typeCol = h.indexOf('search_type'), anonCol = h.indexOf('is_anonymized_query')
   const seen = new Map<string, { cur: Fact | null; prev: Fact | null; frag: boolean }>()
   const sum = (a: Fact, b: Fact) => { a.position = (a.position * a.impressions + b.position * b.impressions) / (a.impressions + b.impressions); a.clicks += b.clicks; a.impressions += b.impressions }
+  const countCols = (['clicks', 'impressions', 'clicks_prev', 'impressions_prev'] as const).map(f => map[f]).filter(c => c !== undefined)
+  const counts = t.rows.slice(1).flatMap(r => countCols.map(c => r[c] ?? ''))
+  const dotDecimal = usesDotDecimals(counts)
+  const grouped = dotDecimal ? undefined : counts.find(c => DOT_GROUPS.test(bare(c)))
+  if (grouped) issues.push({ line: head, level: 'warning', message: `Clicks and impressions like "${grouped.trim()}" are read as thousands (${parseCount(grouped).toLocaleString('en-US')}).` })
   let skipped = 0, zero = 0, otherType = 0, anon = 0, merged = 0
   let lo = '', hi = ''
   for (let r = 1; r < t.rows.length; r++) {
@@ -380,18 +406,19 @@ export function validate(t: Table, map: Mapping): Validation {
       if (!hi || d > hi) hi = d
     }
     const read = (prev: boolean): Fact | string | null => {
-      const clicks = parseNum(row[map[prev ? 'clicks_prev' : 'clicks']!])
-      const imp = parseNum(row[map[prev ? 'impressions_prev' : 'impressions']!])
+      const clicks = parseCount(row[map[prev ? 'clicks_prev' : 'clicks']!], dotDecimal)
+      const imp = parseCount(row[map[prev ? 'impressions_prev' : 'impressions']!], dotDecimal)
       const tag = prev ? ' (previous period)' : ''
       if (prev && !Number.isFinite(clicks) && !Number.isFinite(imp)) return null
       if (!Number.isFinite(clicks) || clicks < 0) return `Clicks${tag} "${row[map[prev ? 'clicks_prev' : 'clicks']!] ?? ''}" is not a number.`
       if (!Number.isFinite(imp) || imp < 0) return `Impressions${tag} "${row[map[prev ? 'impressions_prev' : 'impressions']!] ?? ''}" is not a number.`
+      for (const [n, v, col] of [['Clicks', clicks, 'clicks'], ['Impressions', imp, 'impressions']] as const) if (!Number.isInteger(v)) return `${n}${tag} "${row[map[prev ? `${col}_prev` as const : col]!]}" is not a whole number.`
       if (clicks > imp) return `Clicks${tag} (${clicks}) exceed impressions (${imp}).`
       if (imp === 0) return null
       const sumCol = prev ? undefined : map.sum_position
       const posCol = map[prev ? 'position_prev' : 'position'] ?? -1
       // BigQuery: sum_position is zero-based and summed over impressions, so average position = sum / impressions + 1.
-      const p = sumCol !== undefined && map.position === undefined ? parseNum(row[sumCol]) / imp + 1 : parseNum(row[posCol])
+      const p = sumCol !== undefined && map.position === undefined ? parseCount(row[sumCol], dotDecimal) / imp + 1 : parsePosition(row[posCol])
       if (!Number.isFinite(p) || p < 1) return `Position${tag} "${row[sumCol !== undefined && map.position === undefined ? sumCol : posCol] ?? ''}" must be 1 or more.`
       const ctrCol = map[prev ? 'ctr_prev' : 'ctr']
       if (ctrCol !== undefined) {
