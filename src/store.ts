@@ -120,6 +120,11 @@ export async function deleteProject(id: string): Promise<() => Promise<void>> {
 }
 
 export const getData = (id: string) => idbGet<Dataset>('data', id)
+/** Like getData, but a failed read throws: merging into "nothing" would replace what is stored. */
+export async function readData(id: string): Promise<Dataset | undefined> {
+  if (!await db()) return mem.data.get(id) as Dataset | undefined
+  return tx('data', 'readonly', s => s.get(id))
+}
 export const putData = (id: string, ds: Dataset) => idbPut('data', ds, id)
 
 export const uuid = () => crypto.randomUUID()

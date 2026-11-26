@@ -122,7 +122,7 @@ test('#7 query text cannot become a spreadsheet formula', async ({ page }) => {
   expect(csv.text.split('\n')[1]).toMatch(/^"'=HYPERLINK/)
 })
 
-test.fail('#8 two quick imports keep both tables', async ({ page }) => {
+test('#8 two quick imports keep both tables', async ({ page }) => {
   await newSite(page)
   await drop(page, file('Queries.csv', `Top queries,${HEAD}\nshoes,5,500,1%,9\n`), file('Pages.csv', `Top pages,${HEAD}\nhttps://a.example/,5,500,1%,9\n`))
   const buttons = page.getByRole('button', { name: 'Import 1 rows' })
@@ -132,6 +132,32 @@ test.fail('#8 two quick imports keep both tables', async ({ page }) => {
   await page.reload()
   await expect(page.getByText('Imported data', { exact: true })).toBeVisible()
   await expect(page.getByText(/^2 rows/)).toBeVisible()
+})
+
+test('#8 two quick imports into a sample start one site with both tables', async ({ page }) => {
+  await page.goto('/app?sample=ledgerly&tab=data')
+  await drop(page, file('Queries.csv', `Top queries,${HEAD}\nshoes,5,500,1%,9\n`), file('Pages.csv', `Top pages,${HEAD}\nhttps://a.example/,5,500,1%,9\n`))
+  const buttons = page.getByRole('button', { name: 'Import 1 rows' })
+  await expect(buttons).toHaveCount(2)
+  await buttons.evaluateAll(b => b.reverse().forEach(x => (x as HTMLElement).click()))
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('My site')
+  await expect(page.locator('.toast.ok')).toHaveCount(2)
+  await tab(page, 'Data & settings')
+  await expect(page.getByText(/^2 rows/)).toBeVisible()
+  for (const f of ['Queries.csv', 'Pages.csv']) await expect(page.getByRole('rowheader', { name: f })).toBeVisible()
+  await page.goto('/app')
+  await expect(page.getByRole('link', { name: 'My site' })).toHaveCount(1)
+})
+
+test('#8 rows that cannot be read are not replaced', async ({ page }) => {
+  await newSite(page)
+  await importMore(page, file('Queries.csv', `Top queries,${HEAD}\nshoes,5,500,1%,9\n`))
+  await drop(page, file('Pages.csv', `Top pages,${HEAD}\nhttps://a.example/,5,500,1%,9\n`))
+  await page.evaluate(() => { const get = IDBObjectStore.prototype.get; IDBObjectStore.prototype.get = function (k) { if (this.name === 'data') throw new DOMException('broken', 'DataError'); return get.call(this, k) } })
+  await page.getByRole('button', { name: 'Import 1 rows' }).click()
+  await expect(page.locator('.toast.error')).toContainText('Not imported')
+  await page.reload()
+  await expect(page.getByText(/^1 rows/)).toBeVisible()
 })
 
 test.describe('#9 dates', () => {
