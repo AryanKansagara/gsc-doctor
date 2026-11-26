@@ -430,6 +430,23 @@ test('raw BigQuery searchdata_url_impression: zero-based sum_position, anonymise
   assert.ok(v.issues.every(i => i.level === 'warning'))
 })
 
+test('raw BigQuery: rows that share a key are parts of one total', () => {
+  const head = 'data_date,url,query,country,search_type,device,is_video,impressions,clicks,sum_position\n'
+  const row = (video: string, imp: number, clicks: number, sum: number, q = 'shoes') => `2026-10-01,https://a.example/,${q},usa,WEB,MOBILE,${video},${imp},${clicks},${sum}\n`
+  const { v } = load(head + row('false', 100, 10, 200) + row('true', 40, 5, 40) + row('true', 40, 5, 40), 'url.csv')
+  // 20 clicks, 180 impressions, position (200 + 40 + 40) / 180 + 1
+  assert.equal(v.facts.length, 1)
+  assert.deepEqual([v.facts[0].clicks, v.facts[0].impressions], [20, 180])
+  assert.ok(Math.abs(v.facts[0].position - (280 / 180 + 1)) < 1e-9)
+  assert.deepEqual(v.issues.map(i => i.message), ['2 rows with the same key were added up.'])
+  // Importing the same file again replaces the total.
+  assert.deepEqual(mergeFacts(v.facts, v.facts), v.facts)
+  // A zero-impression part changes nothing, and other tables still warn about duplicates.
+  assert.equal(load(head + row('false', 100, 10, 200) + row('true', 0, 0, 0), 'url.csv').v.facts[0].clicks, 10)
+  const dup = load('date,query,clicks,impressions,position\n2026-10-01,shoes,1,10,3\n2026-10-01,shoes,2,20,3\n', 'rows.csv').v
+  assert.match(dup.issues[0].message, /later row wins/)
+})
+
 test('Search Analytics API JSON: unnamed keys are recognised by their values', () => {
   const t = jsonTable({ rows: [
     { keys: ['2026-10-01', 'banana bread recipe', 'https://a.example/banana-bread/', 'usa', 'MOBILE'], clicks: 12, impressions: 340, ctr: 0.0353, position: 5.4 },
