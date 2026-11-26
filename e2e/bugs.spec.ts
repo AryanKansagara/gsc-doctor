@@ -17,33 +17,35 @@ const apache = (page: Page) => page.locator('.code', { hasText: '.htaccess' }).l
 const nginx = (page: Page) => page.locator('.code', { hasText: 'nginx' }).locator('pre')
 
 test.describe('#2 redirect rules', () => {
-  test.fail('an Apache rule matches only its own path', async ({ page }) => {
+  test('an Apache rule matches only its own path', async ({ page }) => {
     await newSite(page)
     await importAll(page, file('qp.csv', contested('https://a.example/blog/post/', 'https://a.example/blog')))
     await tab(page, 'Cannibalisation')
     await expect(page.getByRole('heading', { name: 'Keep /blog/post/' })).toBeVisible()
     await expect(apache(page)).toHaveText('RedirectMatch 301 "^/blog$" "https://a.example/blog/post/"')
   })
-  test.fail('copies of one page on another host or scheme get no self-redirect', async ({ page }) => {
+  test('copies of one page on another host or scheme get no self-redirect', async ({ page }) => {
     await newSite(page)
     await importAll(page, file('qp.csv', contested('https://a.example/a/', 'http://www.a.example/a/')))
     await tab(page, 'Cannibalisation')
     await expect(page.getByRole('cell', { name: '301 redirect' })).toBeVisible()
-    await expect(page.getByText(/Redirect 301 \/a\//)).toHaveCount(0)
+    await expect(page.locator('.code')).toHaveCount(0)
   })
-  test.fail('a query string is not turned into a rule that never matches', async ({ page }) => {
+  test('a query string is not turned into a rule that never matches', async ({ page }) => {
     await newSite(page)
     await importAll(page, file('qp.csv', contested('https://a.example/a/', 'https://a.example/p?id=2')))
     await tab(page, 'Cannibalisation')
     await expect(page.getByRole('cell', { name: '301 redirect' })).toBeVisible()
-    await expect(page.getByText(/location = \/p\?id=2/)).toHaveCount(0)
+    await expect(page.locator('.code')).toHaveCount(0)
+    await expect(page.getByText('Redirect these by hand:')).toBeVisible()
   })
-  test.fail('a URL cannot add a directive', async ({ page }) => {
+  test('a URL cannot add a directive', async ({ page }) => {
     await newSite(page)
     await importAll(page, file('qp.csv', contested('https://a.example/a/', 'https://a.example/b; } location /admin { allow all')))
     await tab(page, 'Cannibalisation')
     await expect(nginx(page)).toBeVisible()
-    await expect(nginx(page)).not.toContainText('location /admin {')
+    // The whole URL stays inside the quoted path.
+    await expect(nginx(page)).toHaveText('location = "/b; } location /admin { allow all" { return 301 "https://a.example/a/"; }')
   })
 })
 
