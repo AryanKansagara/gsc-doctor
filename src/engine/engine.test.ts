@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { autoMap, detectKind, filterDays, filtersNote, jsonTable, mergeFacts, normPage, parseCsv, parseCtr, parseDate, parseNum, readFile, sumDuplicates, validate, type Table } from './parse.ts'
 import {
   analyze, brandMatcher, cannibalClusters, cannibalisation, changePoint, checkTitle, compareSnapshots, contentDecay, decompose, diagnose,
-  dropWindow, expectedCtr, slice, fitCurve, isotonicDecreasing, pageGroup, pixelWidth, redirectPlan, resolveWindow, snapshot, suggestTitle, theilSen, windowOptions,
+  dropWindow, expectedCtr, slice, fitCurve, isotonicDecreasing, pageGroup, pixelWidth, redirectPlan, redirectRules, resolveWindow, snapshot, suggestTitle, theilSen, windowOptions,
 } from './analyze.ts'
 import { generate, SAMPLES } from './sample.ts'
 import { DEFAULT_SETTINGS, type Fact } from './types.ts'
@@ -180,6 +180,22 @@ test('redirect plan never points two pages at each other and 301s low-traffic lo
 })
 
 // ---------- Decay ----------
+
+test('redirect rules match one path, and pairs a path rule cannot express are left to do by hand', () => {
+  const to = 'https://a.example/blog/post/'
+  const r = (from: string, target = to) => redirectRules([{ from, to: target, action: '301', reason: '', queries: [] }])
+  assert.deepEqual(r('https://a.example/blog').apache, ['RedirectMatch 301 "^/blog$" "https://a.example/blog/post/"'])
+  assert.deepEqual(r('https://a.example/').nginx, ['location = "/" { return 301 "https://a.example/blog/post/"; }'])
+  // Servers match the decoded path; regex characters are literal.
+  assert.deepEqual(r('https://a.example/c++%20(1).html').apache, ['RedirectMatch 301 "^/c\\+\\+ \\(1\\)\\.html$" "https://a.example/blog/post/"'])
+  assert.deepEqual(r('https://a.example/b; } location /x { deny all').nginx, ['location = "/b; } location /x { deny all" { return 301 "https://a.example/blog/post/"; }'])
+  for (const bad of ['http://a.example/blog/post/', 'https://www.a.example/blog/post/', 'https://www.a.example/x', 'https://a.example/p?id=2', '/blog', 'https://a.example/a"b%22', 'https://a.example/x\nDeny', 'https://a.example/%0aDeny', 'https://a.example/%E0%A4%A', 'https://a.example/a%2Fb']) {
+    const x = r(bad)
+    assert.deepEqual([x.apache, x.nginx, x.manual.length], [[], [], 1], bad)
+  }
+  assert.equal(r('https://a.example/x', 'https://a.example/y$1').manual.length, 1)
+  assert.deepEqual(redirectRules([{ from: 'https://a.example/x', to, action: 'canonical', reason: '', queries: [] }]), { apache: [], nginx: [], manual: [] })
+})
 
 test('content decay flags a steady slide and lists the queries lost', () => {
   const ds: Fact[] = []
