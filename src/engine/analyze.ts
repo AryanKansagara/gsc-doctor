@@ -380,6 +380,34 @@ export function redirectPlan(clusters: CannibalCluster[], pageClicks: Map<string
 
 export const redirectCsv = (rs: Redirect[]) => toCsv([['from', 'to', 'action', 'reason', 'queries'], ...rs.map(r => [r.from, r.to, r.action, r.reason, r.queries.join('; ')])])
 
+export interface RedirectRules { apache: string[]; nginx: string[]; manual: { from: string; to: string; why: string }[] }
+
+/**
+ * Server rules for the 301s: each matches exactly one path. Apache's plain `Redirect` is a prefix match, so it would also
+ * catch the pages below. A path rule cannot see the host, scheme or query string, so those pairs are left to do by hand.
+ */
+export function redirectRules(rs: Redirect[]): RedirectRules {
+  const out: RedirectRules = { apache: [], nginx: [], manual: [] }
+  for (const r of rs) {
+    if (r.action !== '301') continue
+    const why = ((): string => {
+      let from: URL, to: URL, path: string
+      // The URL parser drops line breaks, so they are refused before it sees them.
+      if (/[\u0000-\u001f\u007f]/.test(r.from + r.to)) return 'contains control characters'
+      try { from = new URL(r.from); to = new URL(r.to); path = decodeURIComponent(from.pathname) } catch { return 'not a full, valid URL' }
+      if (from.search) return 'has a query string, which a path rule does not match'
+      if (from.host !== to.host) return 'is on another host'
+      if (from.pathname === to.pathname) return 'differs only by scheme'
+      if (/["\\\u0000-\u001f\u007f]/.test(path) || /%2f/i.test(from.pathname) || /[$&"\\]/.test(to.href)) return 'has characters that are not safe in a rule'
+      out.apache.push(`RedirectMatch 301 "^${path.replace(/[.*+?^${}()|[\]]/g, '\\$&')}$" "${to.href}"`)
+      out.nginx.push(`location = "${path}" { return 301 "${to.href}"; }`)
+      return ''
+    })()
+    if (why) out.manual.push({ from: r.from, to: r.to, why })
+  }
+  return out
+}
+
 // ---------- Content decay ----------
 
 export interface Decay { page: string; months: string[]; series: number[]; slope: number; change: number; baseline: number; last: number; pattern: 'steady' | 'step'; gain: number; lost: { query: string; before: number; after: number; posBefore: number; posAfter: number }[] }
